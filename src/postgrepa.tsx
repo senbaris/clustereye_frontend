@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Select, Table, Badge, message, Modal, Tabs, Steps, Row, Col, Card, Progress, Spin, Input, Pagination, Typography, TimePicker, Button, Statistic, Tooltip, Tag } from 'antd';
+import { Select, Table, Badge, message, Modal, Steps, Row, Col, Card, Progress, Spin, Input, Pagination, Typography, TimePicker, Button, Statistic, Tooltip, Tag, Menu, Layout } from 'antd';
 import axios from 'axios';
 import { useLocation } from 'react-router-dom';
-import { CopyOutlined, ReloadOutlined, InfoCircleOutlined, DownloadOutlined } from '@ant-design/icons';
+import { CopyOutlined, ReloadOutlined, InfoCircleOutlined, DownloadOutlined, DatabaseOutlined, BarChartOutlined, SettingOutlined, FileTextOutlined, UserOutlined, TeamOutlined } from '@ant-design/icons';
 import { Dayjs } from 'dayjs';
 import CountUp from 'react-countup';
 import MonacoEditor from './monacoeditor';
 
 
 const { Option } = Select;
-const { TabPane } = Tabs;
 const { Step } = Steps;
 const { Search } = Input;
 const { Paragraph, Text } = Typography;
+const { Sider, Content } = Layout;
 
 interface Database {
     datname: string;
@@ -109,16 +109,16 @@ interface QueryResultUserAccessList {
 }
 
 interface QueryResultLongRunning {
-    duration: string;
     datName: string;
     pid: number;
     userName: string;
     applicationName: string;
     queryStart: string;
+    state: string;
     waitEventType: string | null;
     waitEvent: string | null;
-    state: string;
     query: string;
+    duration: number;
 }
 
 interface QueryResultLock {
@@ -140,10 +140,21 @@ interface QueryResultLock {
 
 
 interface QueryResult {
-    total_connections: number;
-    non_idle_connections: number;
-    max_connections: number;
-    connections_utilization_pctg: number;
+    total_connections?: number;
+    non_idle_connections?: number;
+    max_connections?: number;
+    connections_utilization_pctg?: number;
+    application_name?: string;
+    state?: string;
+    connection_count?: number;
+    // Top CPU sorgusu için eklenen alanlar
+    usename?: string;
+    db_name?: string;
+    total_time?: number;
+    calls?: number;
+    mean?: number;
+    cpu_portion_pctg?: number;
+    short_query?: string;
 }
 
 interface CpuUsage {
@@ -357,8 +368,8 @@ const columnsLongRunning = [
     },
     {
         title: 'Database Name',
-        dataIndex: 'datname',
-        key: 'datname',
+        dataIndex: 'datName',
+        key: 'datName',
     },
     {
         title: 'PID',
@@ -367,28 +378,28 @@ const columnsLongRunning = [
     },
     {
         title: 'User Name',
-        dataIndex: 'usename',
-        key: 'usename',
+        dataIndex: 'userName',
+        key: 'userName',
     },
     {
         title: 'Application Name',
-        dataIndex: 'application_name',
-        key: 'application_name',
+        dataIndex: 'applicationName',
+        key: 'applicationName',
     },
     {
         title: 'Query Start',
-        dataIndex: 'query_start',
-        key: 'query_start',
+        dataIndex: 'queryStart',
+        key: 'queryStart',
     },
     {
         title: 'Wait Event Type',
-        dataIndex: 'wait_event_type',
-        key: 'wait_event_type',
+        dataIndex: 'waitEventType',
+        key: 'waitEventType',
     },
     {
         title: 'Wait Event',
-        dataIndex: 'wait_event',
-        key: 'wait_event',
+        dataIndex: 'waitEvent',
+        key: 'waitEvent',
     },
     {
         title: 'State',
@@ -745,6 +756,9 @@ const PostgrePA: React.FC = () => {
     const linesPerPage = 200;
     const [minDuration, setMinDuration] = useState('');
 
+    // Yeni state değişkenleri
+    const [selectedSubMenu, setSelectedSubMenu] = useState<string>('');
+    const [collapsed, setCollapsed] = useState<boolean>(false);
 
     const formatLogContent = (content: string) => {
         return content.split('\n')
@@ -791,136 +805,733 @@ const PostgrePA: React.FC = () => {
     const fetchQueryResults = async (nodeName: string) => {
         try {
             setIsLoadingQueryResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/run_pg_connstats_query`, {
+            const agentId = `agent_${nodeName}`;
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_connstats',
+                    command: `SELECT
+                        A.total_connections,
+                        A.non_idle_connections,
+                        B.max_connections,
+                        ROUND((100 * A.total_connections::NUMERIC / B.max_connections::NUMERIC), 2) AS connections_utilization_pctg
+                    FROM
+                        (SELECT COUNT(1) AS total_connections, SUM(CASE WHEN state != 'idle' THEN 1 ELSE 0 END) AS non_idle_connections FROM pg_stat_activity) A,
+                        (SELECT setting AS max_connections FROM pg_settings WHERE name = 'max_connections') B;`
+                })
             });
+    
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+    
             const data = await response.json();
-            setQueryResults(data);
-            setIsLoadingQueryResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed result:', parsedResult); // Debug için
+                        
+                        // Sorgu sonucunu array formatına dönüştür
+                        const queryResult = {
+                            total_connections: parsedResult.total_connections || 0,
+                            non_idle_connections: parsedResult.non_idle_connections || 0,
+                            max_connections: parsedResult.max_connections || 0,
+                            connections_utilization_pctg: parsedResult.connections_utilization_pctg || 0
+                        };
+                        
+                        // Array formatında state'e kaydet
+                        setQueryResults([queryResult]);
+                    } catch (error) {
+                        console.error('Error parsing result:', error);
+                        console.log('Raw result:', result);
+                    }
+                } else {
+                    console.error('Unexpected result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid response format:', data);
+            }
+            setIsLoadingQueryResults(false);
         } catch (error) {
             console.error('Error fetching data:', error);
+            setIsLoadingQueryResults(false);
         }
     };
 
     const fetchQueryNonIdleConnsResults = async (nodeName: string) => {
         try {
             setIsLoadingNonIdleQueryResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/run_pg_nonidleconns_query`, {
+            const agentId = `agent_${nodeName}`;
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
-
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_conns_appname',
+                    command: `SELECT 
+                        application_name, 
+                        state, 
+                        COUNT(*) AS connection_count
+                    FROM pg_stat_activity
+                    WHERE application_name IS NOT NULL
+                    GROUP BY application_name, state
+                    ORDER BY application_name, state;`
+                })
             });
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+
             const data = await response.json();
-            setQueryResultsNonIdleConns(data);
-            setIsLoadingNonIdleQueryResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed result:', parsedResult); // Debug için
+                        
+                        // Yeni veri yapısını işle
+                        const queryResult = [];
+                        const rowCount = parsedResult.row_count || 0;
+                        
+                        for (let i = 0; i < rowCount; i++) {
+                            if (parsedResult[`application_name_${i}`] !== '') {
+                                queryResult.push({
+                                    application_name: parsedResult[`application_name_${i}`],
+                                    state: parsedResult[`state_${i}`],
+                                    connection_count: parseInt(parsedResult[`connection_count_${i}`]) || 0
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsNonIdleConns(queryResult);
+                    } catch (error) {
+                        console.error('Error parsing result:', error);
+                        console.log('Raw result:', result);
+                    }
+                } else {
+                    console.error('Unexpected result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid response format:', data);
+            }
+            setIsLoadingNonIdleQueryResults(false);
         } catch (error) {
             console.error('Error fetching data:', error);
+            setIsLoadingNonIdleQueryResults(false);
         }
     };
 
     const fetchQueryCacheHitRatioResults = async (nodeName: string) => {
         try {
-            setIsLoadingCacheHitQueryResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_pg_cachehitratio`, {
+            setIsLoadingCacheHitQueryResults(true);
+            const agentId = `agent_${nodeName}`;
+            
+            const query = `
+                WITH statements AS (
+                    SELECT * FROM pg_stat_statements pss
+                    JOIN pg_roles pr ON (userid=oid)
+                )
+                SELECT rolname, calls, 
+                    shared_blks_hit,
+                    shared_blks_read,
+                    shared_blks_hit/(shared_blks_hit+shared_blks_read)::NUMERIC*100 hit_cache_ratio,
+                    query
+                FROM statements
+                WHERE calls > 0
+                AND shared_blks_hit > 0
+                ORDER BY calls DESC, hit_cache_ratio ASC
+                LIMIT 20;
+            `;
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
-
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_cachehitratio',
+                    command: query
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            setQueryResultsCacheHitRatio(data);
-            setIsLoadingCacheHitQueryResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed result:', parsedResult); // Debug için
+                        
+                        // Hata kontrolü
+                        if (parsedResult.status === 'error' && parsedResult.message && parsedResult.message.includes('pg_stat_statements')) {
+                            // pg_stat_statements extension'ı yüklü değil
+                            message.error({
+                                content: (
+                                    <div>
+                                        <p><strong>Error:</strong> pg_stat_statements extension is not installed.</p>
+                                        <p>To install the extension, run the following SQL command as a superuser:</p>
+                                        <pre style={{ background: '#f5f5f5', padding: '10px', borderRadius: '4px' }}>
+                                            CREATE EXTENSION pg_stat_statements;
+                                        </pre>
+                                        <p>After installation, you may need to restart the PostgreSQL server.</p>
+                                    </div>
+                                ),
+                                duration: 10
+                            });
+                            setQueryResultsCacheHitRatio([]);
+                            setIsLoadingCacheHitQueryResults(false);
+                            return;
+                        }
+                        
+                        // Sorgu sonucunu array formatına dönüştür
+                        const queryResult: QueryResultCacheHitRatio[] = [];
+                        
+                        // Agent'dan gelen yanıt formatı farklı olabilir
+                        if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
+                            // Standart format
+                            const rowCount = parsedResult.row_count || 0;
+                            
+                            for (let i = 0; i < rowCount; i++) {
+                                if (parsedResult[`rolname_${i}`] !== '') {
+                                    queryResult.push({
+                                        rolname: parsedResult[`rolname_${i}`],
+                                        calls: parseInt(parsedResult[`calls_${i}`]) || 0,
+                                        shared_blks_hit: parseInt(parsedResult[`shared_blks_hit_${i}`]) || 0,
+                                        shared_blks_read: parseInt(parsedResult[`shared_blks_read_${i}`]) || 0,
+                                        hit_cache_ratio: parseFloat(parsedResult[`hit_cache_ratio_${i}`]) || 0,
+                                        query: parsedResult[`query_${i}`]
+                                    });
+                                }
+                            }
+                        } else if (parsedResult.status === 'success' && parsedResult.rows && parsedResult.rows.length > 0) {
+                            // Alternatif format - rows array'i içinde
+                            parsedResult.rows.forEach((row: any) => {
+                                queryResult.push({
+                                    rolname: row.rolname || '',
+                                    calls: parseInt(row.calls) || 0,
+                                    shared_blks_hit: parseInt(row.shared_blks_hit) || 0,
+                                    shared_blks_read: parseInt(row.shared_blks_read) || 0,
+                                    hit_cache_ratio: parseFloat(row.hit_cache_ratio) || 0,
+                                    query: row.query || ''
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.data && parsedResult.data.length > 0) {
+                            // Başka bir alternatif format - data array'i içinde
+                            parsedResult.data.forEach((row: any) => {
+                                queryResult.push({
+                                    rolname: row.rolname || '',
+                                    calls: parseInt(row.calls) || 0,
+                                    shared_blks_hit: parseInt(row.shared_blks_hit) || 0,
+                                    shared_blks_read: parseInt(row.shared_blks_read) || 0,
+                                    hit_cache_ratio: parseFloat(row.hit_cache_ratio) || 0,
+                                    query: row.query || ''
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.result && parsedResult.result.length > 0) {
+                            // Başka bir alternatif format - result array'i içinde
+                            parsedResult.result.forEach((row: any) => {
+                                queryResult.push({
+                                    rolname: row.rolname || '',
+                                    calls: parseInt(row.calls) || 0,
+                                    shared_blks_hit: parseInt(row.shared_blks_hit) || 0,
+                                    shared_blks_read: parseInt(row.shared_blks_read) || 0,
+                                    hit_cache_ratio: parseFloat(row.hit_cache_ratio) || 0,
+                                    query: row.query || ''
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.map) {
+                            // Map formatı - doğrudan map içinde
+                            const row = parsedResult.map;
+                            queryResult.push({
+                                rolname: row.rolname || '',
+                                calls: parseInt(row.calls) || 0,
+                                shared_blks_hit: parseInt(row.shared_blks_hit) || 0,
+                                shared_blks_read: parseInt(row.shared_blks_read) || 0,
+                                hit_cache_ratio: parseFloat(row.hit_cache_ratio) || 0,
+                                query: row.query || ''
+                            });
+                        } else if (parsedResult.status === 'success') {
+                            // Doğrudan nesne formatı - console'da gördüğümüz format
+                            // Bu durumda parsedResult'ın kendisi bir nesne olabilir
+                            if (parsedResult.rolname) {
+                                queryResult.push({
+                                    rolname: parsedResult.rolname || '',
+                                    calls: parseInt(parsedResult.calls) || 0,
+                                    shared_blks_hit: parseInt(parsedResult.shared_blks_hit) || 0,
+                                    shared_blks_read: parseInt(parsedResult.shared_blks_read) || 0,
+                                    hit_cache_ratio: parseFloat(parsedResult.hit_cache_ratio) || 0,
+                                    query: parsedResult.query || ''
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsCacheHitRatio(queryResult);
+                    } catch (error) {
+                        console.error('Error parsing result:', error);
+                        console.log('Raw result:', result);
+                    }
+                } else {
+                    console.error('Unexpected result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid response format:', data);
+            }
+            setIsLoadingCacheHitQueryResults(false);
         } catch (error) {
             console.error('Error fetching data:', error);
+            setIsLoadingCacheHitQueryResults(false);
         }
     };
 
     const fetchQueryUserAccessList = async (nodeName: string) => {
         try {
-            setIsLoadingUserAccessListResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_pg_users`, {
+            setIsLoadingUserAccessListResults(true);
+            const agentId = `agent_${nodeName}`;
+            
+            const query = `
+                SELECT usename, usesuper FROM pg_user;
+            `;
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
-
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_user_access_list',
+                    command: query
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            setQueryResultsUserAccessList(data);
-            setIsLoadingUserAccessListResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed user access list result:', parsedResult); // Debug için
+                        
+                        const queryResult: QueryResultUserAccessList[] = [];
+                        
+                        // Agent'dan gelen yanıt formatı farklı olabilir
+                        if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
+                            // Standart format
+                            const rowCount = parsedResult.row_count || 0;
+                            
+                            for (let i = 0; i < rowCount; i++) {
+                                if (parsedResult[`usename_${i}`] !== '') {
+                                    queryResult.push({
+                                        username: parsedResult[`usename_${i}`],
+                                        isSuperuser: parsedResult[`usesuper_${i}`] === true
+                                    });
+                                }
+                            }
+                        } else if (parsedResult.status === 'success' && parsedResult.rows && parsedResult.rows.length > 0) {
+                            // Alternatif format - rows array'i içinde
+                            parsedResult.rows.forEach((row: any) => {
+                                queryResult.push({
+                                    username: row.usename || '',
+                                    isSuperuser: row.usesuper === true
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.data && parsedResult.data.length > 0) {
+                            // Başka bir alternatif format - data array'i içinde
+                            parsedResult.data.forEach((row: any) => {
+                                queryResult.push({
+                                    username: row.usename || '',
+                                    isSuperuser: row.usesuper === true
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.result && parsedResult.result.length > 0) {
+                            // Başka bir alternatif format - result array'i içinde
+                            parsedResult.result.forEach((row: any) => {
+                                queryResult.push({
+                                    username: row.usename || '',
+                                    isSuperuser: row.usesuper === true
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.map) {
+                            // Map formatı - doğrudan map içinde
+                            const row = parsedResult.map;
+                            queryResult.push({
+                                username: row.usename || '',
+                                isSuperuser: row.usesuper === true
+                            });
+                        } else if (parsedResult.status === 'success') {
+                            // Doğrudan nesne formatı
+                            if (parsedResult.usename) {
+                                queryResult.push({
+                                    username: parsedResult.usename || '',
+                                    isSuperuser: parsedResult.usesuper === true
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsUserAccessList(queryResult);
         } catch (error) {
-            console.error('Error fetching data:', error);
+                        console.error('Error parsing user access list result:', error);
+                        console.log('Raw user access list result:', result);
+                    }
+                } else {
+                    console.error('Unexpected user access list result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid user access list response format:', data);
+            }
+            setIsLoadingUserAccessListResults(false);
+        } catch (error) {
+            console.error('Error fetching user access list data:', error);
+            setIsLoadingUserAccessListResults(false);
         }
     };
 
 
     const fetchQueryLongRunningResults = async (nodeName: string) => {
         try {
-            setIsLoadingLongRunningQueryResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_pg_longrunning`, {
+            setIsLoadingLongRunningQueryResults(true);
+            const agentId = `agent_${nodeName}`;
+            
+            const query = `
+                SELECT 
+                    datname as datName,
+                    pid,
+                    usename as userName,
+                    application_name as applicationName,
+                    query_start as queryStart,
+                    state,
+                    wait_event_type as waitEventType,
+                    wait_event as waitEvent,
+                    query,
+                    EXTRACT(EPOCH FROM (now() - query_start))::int as duration
+                FROM pg_stat_activity 
+                WHERE state != 'idle' 
+                AND pid != pg_backend_pid() 
+                AND EXTRACT(EPOCH FROM (now() - query_start)) > 1 
+                AND usename != 'replica'
+                ORDER BY duration DESC;
+            `;
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
-
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_longrunning',
+                    command: query
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            setQueryResultsLongRunning(data);
-            setIsLoadingLongRunningQueryResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed result:', parsedResult); // Debug için
+                        
+                        // Sorgu sonucunu array formatına dönüştür
+                        const queryResult: QueryResultLongRunning[] = [];
+                        
+                        // Agent'dan gelen yanıt formatı farklı olabilir
+                        if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
+                            // Standart format
+                            const rowCount = parsedResult.row_count || 0;
+                            
+                            for (let i = 0; i < rowCount; i++) {
+                                if (parsedResult[`datName_${i}`] !== '') {
+                                    queryResult.push({
+                                        datName: parsedResult[`datName_${i}`],
+                                        pid: parseInt(parsedResult[`pid_${i}`]) || 0,
+                                        userName: parsedResult[`userName_${i}`],
+                                        applicationName: parsedResult[`applicationName_${i}`],
+                                        queryStart: parsedResult[`queryStart_${i}`],
+                                        state: parsedResult[`state_${i}`],
+                                        waitEventType: parsedResult[`waitEventType_${i}`] || null,
+                                        waitEvent: parsedResult[`waitEvent_${i}`] || null,
+                                        query: parsedResult[`query_${i}`],
+                                        duration: parseInt(parsedResult[`duration_${i}`]) || 0
+                                    });
+                                }
+                            }
+                        } else if (parsedResult.status === 'success' && parsedResult.rows && parsedResult.rows.length > 0) {
+                            // Alternatif format - rows array'i içinde
+                            parsedResult.rows.forEach((row: any) => {
+                                queryResult.push({
+                                    datName: row.datname || '',
+                                    pid: parseInt(row.pid) || 0,
+                                    userName: row.username || '',
+                                    applicationName: row.applicationname || '',
+                                    queryStart: row.querystart || '',
+                                    state: row.state || '',
+                                    waitEventType: row.waiteventtype || null,
+                                    waitEvent: row.waitevent || null,
+                                    query: row.query || '',
+                                    duration: parseInt(row.duration) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.data && parsedResult.data.length > 0) {
+                            // Başka bir alternatif format - data array'i içinde
+                            parsedResult.data.forEach((row: any) => {
+                                queryResult.push({
+                                    datName: row.datname || '',
+                                    pid: parseInt(row.pid) || 0,
+                                    userName: row.username || '',
+                                    applicationName: row.applicationname || '',
+                                    queryStart: row.querystart || '',
+                                    state: row.state || '',
+                                    waitEventType: row.waiteventtype || null,
+                                    waitEvent: row.waitevent || null,
+                                    query: row.query || '',
+                                    duration: parseInt(row.duration) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.result && parsedResult.result.length > 0) {
+                            // Başka bir alternatif format - result array'i içinde
+                            parsedResult.result.forEach((row: any) => {
+                                queryResult.push({
+                                    datName: row.datname || '',
+                                    pid: parseInt(row.pid) || 0,
+                                    userName: row.username || '',
+                                    applicationName: row.applicationname || '',
+                                    queryStart: row.querystart || '',
+                                    state: row.state || '',
+                                    waitEventType: row.waiteventtype || null,
+                                    waitEvent: row.waitevent || null,
+                                    query: row.query || '',
+                                    duration: parseInt(row.duration) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.map) {
+                            // Map formatı - doğrudan map içinde
+                            const row = parsedResult.map;
+                            queryResult.push({
+                                datName: row.datname || '',
+                                pid: parseInt(row.pid) || 0,
+                                userName: row.username || '',
+                                applicationName: row.applicationname || '',
+                                queryStart: row.querystart || '',
+                                state: row.state || '',
+                                waitEventType: row.waiteventtype || null,
+                                waitEvent: row.waitevent || null,
+                                query: row.query || '',
+                                duration: parseInt(row.duration) || 0
+                            });
+                        } else if (parsedResult.status === 'success') {
+                            // Doğrudan nesne formatı - console'da gördüğümüz format
+                            // Bu durumda parsedResult'ın kendisi bir nesne olabilir
+                            if (parsedResult.datname) {
+                                queryResult.push({
+                                    datName: parsedResult.datname || '',
+                                    pid: parseInt(parsedResult.pid) || 0,
+                                    userName: parsedResult.username || '',
+                                    applicationName: parsedResult.applicationname || '',
+                                    queryStart: parsedResult.querystart || '',
+                                    state: parsedResult.state || '',
+                                    waitEventType: parsedResult.waiteventtype || null,
+                                    waitEvent: parsedResult.waitevent || null,
+                                    query: parsedResult.query || '',
+                                    duration: parseInt(parsedResult.duration) || 0
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsLongRunning(queryResult);
+                    } catch (error) {
+                        console.error('Error parsing result:', error);
+                        console.log('Raw result:', result);
+                    }
+                } else {
+                    console.error('Unexpected result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid response format:', data);
+            }
+            setIsLoadingLongRunningQueryResults(false);
         } catch (error) {
             console.error('Error fetching data:', error);
-            setIsLoadingLongRunningQueryResults(false)
+            setIsLoadingLongRunningQueryResults(false);
         }
     };
 
     const fetchQueryLocksResults = async (nodeName: string) => {
         try {
-            setIsLoadingLocksResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_pg_locks`, {
+            setIsLoadingLocksResults(true);
+            const agentId = `agent_${nodeName}`;
+            
+            const query = `WITH lock_info AS (
+                     SELECT 
+                         pg_locks.locktype,
+                         pg_locks.database,
+                         pg_locks.relation,
+                         pg_locks.page,
+                         pg_locks.tuple,
+                         pg_locks.virtualxid,
+                         pg_locks.transactionid,
+                         pg_locks.classid,
+                         pg_locks.objid,
+                         pg_locks.objsubid,
+                         pg_locks.virtualtransaction,
+                         pg_locks.pid,
+                         pg_locks.mode,
+                         pg_locks.granted,
+                         pg_stat_activity.query AS query_text,
+                         pg_stat_activity.state AS query_state,
+                         pg_stat_activity.query_start,
+                         pg_stat_activity.application_name,
+                         pg_stat_activity.client_addr,
+                         pg_stat_activity.client_port
+                     FROM pg_locks
+                     JOIN pg_stat_activity ON pg_locks.pid = pg_stat_activity.pid
+                 )
+                 SELECT 
+                     waiting.query_text AS waiting_query,
+                     waiting.pid AS waiting_pid,
+                     waiting.query_start AS waiting_query_start,
+                     waiting.locktype AS waiting_locktype,
+                     waiting.mode AS waiting_lockmode,
+                     blocking.query_text AS blocking_query,
+                     blocking.pid AS blocking_pid,
+                     blocking.query_start AS blocking_query_start,
+                     blocking.locktype AS blocking_locktype,
+                     blocking.mode AS blocking_lockmode,
+                     blocking.granted AS blocking_granted,
+                     waiting.client_addr AS waiting_client,
+                     blocking.client_addr AS blocking_client
+                 FROM 
+                     lock_info waiting
+                 JOIN 
+                     lock_info blocking ON 
+                         waiting.locktype = blocking.locktype
+                         AND waiting.database IS NOT DISTINCT FROM blocking.database
+                         AND waiting.relation IS NOT DISTINCT FROM blocking.relation
+                         AND waiting.page IS NOT DISTINCT FROM blocking.page
+                         AND waiting.tuple IS NOT DISTINCT FROM blocking.tuple
+                         AND waiting.virtualxid IS NOT DISTINCT FROM blocking.virtualxid
+                         AND waiting.transactionid IS NOT DISTINCT FROM blocking.transactionid
+                         AND waiting.classid IS NOT DISTINCT FROM blocking.classid
+                         AND waiting.objid IS NOT DISTINCT FROM blocking.objid
+                         AND waiting.objsubid IS NOT DISTINCT FROM blocking.objsubid
+                         AND waiting.pid != blocking.pid
+                 WHERE 
+                     waiting.granted = false
+                     AND blocking.granted = true
+                 ORDER BY 
+                     waiting.query_start;`;
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
-
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_locks',
+                    command: query
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            setQueryResultsLocks(data);
-            setIsLoadingLocksResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed result:', parsedResult); // Debug için
+                        
+                        // Sorgu sonucunu array formatına dönüştür
+                        const queryResult = [];
+                        const rowCount = parsedResult.row_count || 0;
+                        
+                        for (let i = 0; i < rowCount; i++) {
+                            if (parsedResult[`waiting_query_${i}`] !== '') {
+                                queryResult.push({
+                                    waitingQuery: parsedResult[`waiting_query_${i}`],
+                                    waitingPid: parsedResult[`waiting_pid_${i}`],
+                                    waitingQueryStart: parsedResult[`waiting_query_start_${i}`],
+                                    waitingLockType: parsedResult[`waiting_locktype_${i}`],
+                                    waitingLockMode: parsedResult[`waiting_lockmode_${i}`],
+                                    blockingQuery: parsedResult[`blocking_query_${i}`],
+                                    blockingPid: parsedResult[`blocking_pid_${i}`],
+                                    blockingQueryStart: parsedResult[`blocking_query_start_${i}`],
+                                    blockingLockType: parsedResult[`blocking_locktype_${i}`],
+                                    blockingLockMode: parsedResult[`blocking_lockmode_${i}`],
+                                    blockingGranted: parsedResult[`blocking_granted_${i}`] === 'true',
+                                    waitingClient: parsedResult[`waiting_client_${i}`],
+                                    blockingClient: parsedResult[`blocking_client_${i}`]
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsLocks(queryResult);
         } catch (error) {
-            setIsLoadingLocksResults(false)
+                        console.error('Error parsing result:', error);
+                        console.log('Raw result:', result);
+                    }
+                } else {
+                    console.error('Unexpected result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid response format:', data);
+            }
+            setIsLoadingLocksResults(false);
+        } catch (error) {
             console.error('Error fetching data:', error);
+            setIsLoadingLocksResults(false);
         }
-
     };
 
     const fetchCPUUsage = async (nodeName: string) => {
@@ -1015,25 +1626,106 @@ const PostgrePA: React.FC = () => {
 
     const fetchQueryTopCpuResults = useCallback(async (nodeName: string) => {
         try {
-            setIsLoadingTopCpuQueryResults(true)
+            setIsLoadingTopCpuQueryResults(true);
+            const agentId = `agent_${nodeName}`;
+            
+            // PostgreSQL versiyonunu kontrol et
             const selectedNodeInfo = nodeInfo.find(node => node.name === nodeName);
             const PGVersion = selectedNodeInfo ? selectedNodeInfo.PGVersion : 'unknown';
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/run_pg_topcpu_query`, {
+            
+            // Versiyon numarasını çıkar (örn: "14.7" -> 14)
+            const pgVersionMajor = parseInt(PGVersion.split('.')[0]);
+            
+            // Versiyona göre sorgu seç
+            let query;
+            if (pgVersionMajor < 13) {
+                query = `SELECT  pu.usename, pd.datname as db_name, round(pss.total_time::numeric, 2) as total_time, pss.calls, round(pss.mean_time::numeric, 2) as mean, round((100 * pss.total_time / sum(pss.total_time::numeric) OVER ())::numeric, 2) as cpu_portion_pctg, pss.query as short_query FROM pg_stat_statements pss JOIN pg_database pd ON pd.oid = pss.dbid JOIN pg_user pu ON pu.usesysid = pss.userid where pd.datname not in ('pmm_user','postgres') ORDER BY pss.total_time DESC LIMIT 10;`;
+            } else {
+                query = `SELECT  pu.usename, pd.datname as db_name, round((pss.total_exec_time + pss.total_plan_time)::numeric, 2) as total_time, pss.calls, round((pss.mean_exec_time + pss.mean_plan_time)::numeric, 2) as mean, round((100 * (pss.total_exec_time + pss.total_plan_time) / sum((pss.total_exec_time + pss.total_plan_time)::numeric) OVER ())::numeric, 2) as cpu_portion_pctg, pss.query as short_query FROM pg_stat_statements pss JOIN pg_database pd ON pd.oid = pss.dbid JOIN pg_user pu ON pu.usesysid = pss.userid where pd.datname not in ('pmm_user','postgres') ORDER BY (pss.total_exec_time + pss.total_plan_time) DESC LIMIT 10;`;
+            }
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName, PGVersion: PGVersion }),
-
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_topcpu',
+                    command: query
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            setQueryResultsTopCpu(data);
-            setIsLoadingTopCpuQueryResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed result:', parsedResult); // Debug için
+                        
+                        // Hata kontrolü
+                        if (parsedResult.status === 'error' && parsedResult.message && parsedResult.message.includes('pg_stat_statements')) {
+                            // pg_stat_statements extension'ı yüklü değil
+                            message.error({
+                                content: (
+                                    <div>
+                                        <p><strong>Error:</strong> pg_stat_statements extension is not installed.</p>
+                                        <p>To install the extension, run the following SQL command as a superuser:</p>
+                                        <pre style={{ background: '#f5f5f5', padding: '10px', borderRadius: '4px' }}>
+                                            CREATE EXTENSION pg_stat_statements;
+                                        </pre>
+                                        <p>After installation, you may need to restart the PostgreSQL server.</p>
+                                    </div>
+                                ),
+                                duration: 10
+                            });
+                            setQueryResultsTopCpu([]);
+                            setIsLoadingTopCpuQueryResults(false);
+                            return;
+                        }
+                        
+                        // Sorgu sonucunu array formatına dönüştür
+                        const queryResult = [];
+                        const rowCount = parsedResult.row_count || 0;
+                        
+                        for (let i = 0; i < rowCount; i++) {
+                            if (parsedResult[`usename_${i}`] !== '') {
+                                queryResult.push({
+                                    usename: parsedResult[`usename_${i}`],
+                                    db_name: parsedResult[`db_name_${i}`],
+                                    total_time: parsedResult[`total_time_${i}`],
+                                    calls: parsedResult[`calls_${i}`],
+                                    mean: parsedResult[`mean_${i}`],
+                                    cpu_portion_pctg: parsedResult[`cpu_portion_pctg_${i}`],
+                                    short_query: parsedResult[`short_query_${i}`]
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsTopCpu(queryResult);
+                    } catch (error) {
+                        console.error('Error parsing result:', error);
+                        console.log('Raw result:', result);
+                    }
+                } else {
+                    console.error('Unexpected result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid response format:', data);
+            }
+            setIsLoadingTopCpuQueryResults(false);
         } catch (error) {
             console.error('Error fetching data:', error);
+            setIsLoadingTopCpuQueryResults(false);
         }
     }, [nodeInfo]);
 
@@ -1060,43 +1752,366 @@ const PostgrePA: React.FC = () => {
 
     const fetchQueryUnusedIndexes = async (nodeName: string, dbName: string) => {
         try {
-            setIsLoadingUnusedIndexesResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/run_pg_unused_indexes`, {
+            setIsLoadingUnusedIndexesResults(true);
+            const agentId = `agent_${nodeName}`;
+            
+            const query = `
+                select 'regular index' as indextype,
+                    stats_child.schemaname,
+                    stats_child.relname AS tablename,
+                    c.relname as indexname,
+                    index_columns.idx_columns as idx_columns,
+                    stats_child.idx_scan as id_scan_count,
+                    pg_relation_size(stats_child.indexrelid) as index_size 
+                from pg_class c 
+                join pg_index idx_parent on idx_parent.indexrelid = c.oid 
+                join pg_catalog.pg_stat_user_indexes stats_child on c.oid = stats_child.indexrelid, 
+                LATERAL (
+                    SELECT string_agg(attname, ', ' order by attnum) AS idx_columns 
+                    FROM pg_attribute 
+                    WHERE attrelid = c.oid
+                ) index_columns 
+                where c.relkind = 'i' 
+                AND 0 <>ALL (idx_parent.indkey) 
+                AND NOT idx_parent.indisunique  
+                AND NOT EXISTS (
+                    SELECT 1 
+                    FROM pg_catalog.pg_constraint cc 
+                    WHERE cc.conindid = idx_parent.indexrelid
+                ) 
+                AND NOT EXISTS (
+                    SELECT 1 
+                    FROM pg_inherits pi 
+                    where pi.inhrelid = c.oid
+                ) 
+                and stats_child.relname not like '%template';
+            `;
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName, dbName: dbName }), // dbName parametresi eklendi
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_unused_indexes',
+                    command: query,
+                    database: dbName
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            setQueryResultsUnusedIndexes(data);
-            setIsLoadingUnusedIndexesResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed unused indexes result:', parsedResult); // Debug için
+                        
+                        const queryResult: QueryResultUnusedIndexes[] = [];
+                        
+                        // Agent'dan gelen yanıt formatı farklı olabilir
+                        if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
+                            // Standart format
+                            const rowCount = parsedResult.row_count || 0;
+                            
+                            for (let i = 0; i < rowCount; i++) {
+                                if (parsedResult[`indextype_${i}`] !== '') {
+                                    queryResult.push({
+                                        indextype: parsedResult[`indextype_${i}`],
+                                        schemaname: parsedResult[`schemaname_${i}`],
+                                        tablename: parsedResult[`tablename_${i}`],
+                                        indexname: parsedResult[`indexname_${i}`],
+                                        idx_columns: parsedResult[`idx_columns_${i}`],
+                                        id_scan_count: parseInt(parsedResult[`id_scan_count_${i}`]) || 0,
+                                        index_size: parseInt(parsedResult[`index_size_${i}`]) || 0
+                                    });
+                                }
+                            }
+                        } else if (parsedResult.status === 'success' && parsedResult.rows && parsedResult.rows.length > 0) {
+                            // Alternatif format - rows array'i içinde
+                            parsedResult.rows.forEach((row: any) => {
+                                queryResult.push({
+                                    indextype: row.indextype || '',
+                                    schemaname: row.schemaname || '',
+                                    tablename: row.tablename || '',
+                                    indexname: row.indexname || '',
+                                    idx_columns: row.idx_columns || '',
+                                    id_scan_count: parseInt(row.id_scan_count) || 0,
+                                    index_size: parseInt(row.index_size) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.data && parsedResult.data.length > 0) {
+                            // Başka bir alternatif format - data array'i içinde
+                            parsedResult.data.forEach((row: any) => {
+                                queryResult.push({
+                                    indextype: row.indextype || '',
+                                    schemaname: row.schemaname || '',
+                                    tablename: row.tablename || '',
+                                    indexname: row.indexname || '',
+                                    idx_columns: row.idx_columns || '',
+                                    id_scan_count: parseInt(row.id_scan_count) || 0,
+                                    index_size: parseInt(row.index_size) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.result && parsedResult.result.length > 0) {
+                            // Başka bir alternatif format - result array'i içinde
+                            parsedResult.result.forEach((row: any) => {
+                                queryResult.push({
+                                    indextype: row.indextype || '',
+                                    schemaname: row.schemaname || '',
+                                    tablename: row.tablename || '',
+                                    indexname: row.indexname || '',
+                                    idx_columns: row.idx_columns || '',
+                                    id_scan_count: parseInt(row.id_scan_count) || 0,
+                                    index_size: parseInt(row.index_size) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.map) {
+                            // Map formatı - doğrudan map içinde
+                            const row = parsedResult.map;
+                            queryResult.push({
+                                indextype: row.indextype || '',
+                                schemaname: row.schemaname || '',
+                                tablename: row.tablename || '',
+                                indexname: row.indexname || '',
+                                idx_columns: row.idx_columns || '',
+                                id_scan_count: parseInt(row.id_scan_count) || 0,
+                                index_size: parseInt(row.index_size) || 0
+                            });
+                        } else if (parsedResult.status === 'success') {
+                            // Doğrudan nesne formatı
+                            if (parsedResult.indextype) {
+                                queryResult.push({
+                                    indextype: parsedResult.indextype || '',
+                                    schemaname: parsedResult.schemaname || '',
+                                    tablename: parsedResult.tablename || '',
+                                    indexname: parsedResult.indexname || '',
+                                    idx_columns: parsedResult.idx_columns || '',
+                                    id_scan_count: parseInt(parsedResult.id_scan_count) || 0,
+                                    index_size: parseInt(parsedResult.index_size) || 0
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsUnusedIndexes(queryResult);
         } catch (error) {
-            console.error('Error fetching data:', error);
+                        console.error('Error parsing unused indexes result:', error);
+                        console.log('Raw unused indexes result:', result);
+                    }
+                } else {
+                    console.error('Unexpected unused indexes result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid unused indexes response format:', data);
+            }
+            setIsLoadingUnusedIndexesResults(false);
+        } catch (error) {
+            console.error('Error fetching unused indexes data:', error);
+            setIsLoadingUnusedIndexesResults(false);
         }
     };
 
     const fetchQueryIndexBloat = async (nodeName: string, dbName: string) => {
         try {
-            setIsLoadingIndexBloatResults(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/run_pg_index_bloat`, {
+            setIsLoadingIndexBloatResults(true);
+            const agentId = `agent_${nodeName}`;
+            
+            const query = `
+                WITH index_bloat AS (
+                    SELECT
+                        current_database() AS db_name,
+                        n.nspname AS schema_name,
+                        t.relname AS table_name,
+                        i.indexrelid::regclass::text AS index_name,
+                        t.reltuples::bigint AS num_rows,
+                        t.relpages::bigint AS total_pages,
+                        CEIL(t.reltuples * (pg_column_size(t) + 4) / 8192.0) AS expected_pages,
+                        t.relpages - CEIL(t.reltuples * (pg_column_size(t) + 4) / 8192.0) AS bloat_pages
+                    FROM
+                        pg_stat_user_indexes i
+                        JOIN pg_class t ON i.relid = t.oid
+                        JOIN pg_namespace n ON t.relnamespace = n.oid
+                    WHERE
+                        t.relpages > 0
+                )
+                SELECT
+                    db_name,
+                    schema_name,
+                    table_name,
+                    index_name,
+                    num_rows,
+                    total_pages,
+                    expected_pages,
+                    bloat_pages,
+                    bloat_pages / total_pages::float*100 AS bloat_ratio,
+                    CASE 
+                        WHEN bloat_pages / total_pages::float*100 >= 50 THEN 3
+                        WHEN bloat_pages / total_pages::float*100 >= 25 THEN 2
+                        WHEN bloat_pages / total_pages::float*100 > 0 THEN 1
+                        ELSE 0
+                    END AS fragmentation_level
+                FROM index_bloat
+                WHERE bloat_pages > 0
+                ORDER BY bloat_ratio DESC;
+            `;
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName, dbName: dbName }),
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_index_bloat',
+                    command: query,
+                    database: dbName
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            setQueryResultsIndexBloat(data);
-            setIsLoadingIndexBloatResults(false)
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed index bloat result:', parsedResult); // Debug için
+                        
+                        const queryResult: QueryResultIndexBloat[] = [];
+                        
+                        // Agent'dan gelen yanıt formatı farklı olabilir
+                        if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
+                            // Standart format
+                            const rowCount = parsedResult.row_count || 0;
+                            
+                            for (let i = 0; i < rowCount; i++) {
+                                if (parsedResult[`db_name_${i}`] !== '') {
+                                    queryResult.push({
+                                        db_name: parsedResult[`db_name_${i}`],
+                                        schema_name: parsedResult[`schema_name_${i}`],
+                                        table_name: parsedResult[`table_name_${i}`],
+                                        index_name: parsedResult[`index_name_${i}`],
+                                        num_rows: parseInt(parsedResult[`num_rows_${i}`]) || 0,
+                                        total_pages: parseInt(parsedResult[`total_pages_${i}`]) || 0,
+                                        expected_pages: parseInt(parsedResult[`expected_pages_${i}`]) || 0,
+                                        bloat_pages: parseInt(parsedResult[`bloat_pages_${i}`]) || 0,
+                                        bloat_ratio: parseFloat(parsedResult[`bloat_ratio_${i}`]) || 0,
+                                        fragmentation_level: parseInt(parsedResult[`fragmentation_level_${i}`]) || 0
+                                    });
+                                }
+                            }
+                        } else if (parsedResult.status === 'success' && parsedResult.rows && parsedResult.rows.length > 0) {
+                            // Alternatif format - rows array'i içinde
+                            parsedResult.rows.forEach((row: any) => {
+                                queryResult.push({
+                                    db_name: row.db_name || '',
+                                    schema_name: row.schema_name || '',
+                                    table_name: row.table_name || '',
+                                    index_name: row.index_name || '',
+                                    num_rows: parseInt(row.num_rows) || 0,
+                                    total_pages: parseInt(row.total_pages) || 0,
+                                    expected_pages: parseInt(row.expected_pages) || 0,
+                                    bloat_pages: parseInt(row.bloat_pages) || 0,
+                                    bloat_ratio: parseFloat(row.bloat_ratio) || 0,
+                                    fragmentation_level: parseInt(row.fragmentation_level) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.data && parsedResult.data.length > 0) {
+                            // Başka bir alternatif format - data array'i içinde
+                            parsedResult.data.forEach((row: any) => {
+                                queryResult.push({
+                                    db_name: row.db_name || '',
+                                    schema_name: row.schema_name || '',
+                                    table_name: row.table_name || '',
+                                    index_name: row.index_name || '',
+                                    num_rows: parseInt(row.num_rows) || 0,
+                                    total_pages: parseInt(row.total_pages) || 0,
+                                    expected_pages: parseInt(row.expected_pages) || 0,
+                                    bloat_pages: parseInt(row.bloat_pages) || 0,
+                                    bloat_ratio: parseFloat(row.bloat_ratio) || 0,
+                                    fragmentation_level: parseInt(row.fragmentation_level) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.result && parsedResult.result.length > 0) {
+                            // Başka bir alternatif format - result array'i içinde
+                            parsedResult.result.forEach((row: any) => {
+                                queryResult.push({
+                                    db_name: row.db_name || '',
+                                    schema_name: row.schema_name || '',
+                                    table_name: row.table_name || '',
+                                    index_name: row.index_name || '',
+                                    num_rows: parseInt(row.num_rows) || 0,
+                                    total_pages: parseInt(row.total_pages) || 0,
+                                    expected_pages: parseInt(row.expected_pages) || 0,
+                                    bloat_pages: parseInt(row.bloat_pages) || 0,
+                                    bloat_ratio: parseFloat(row.bloat_ratio) || 0,
+                                    fragmentation_level: parseInt(row.fragmentation_level) || 0
+                                });
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.map) {
+                            // Map formatı - doğrudan map içinde
+                            const row = parsedResult.map;
+                            queryResult.push({
+                                db_name: row.db_name || '',
+                                schema_name: row.schema_name || '',
+                                table_name: row.table_name || '',
+                                index_name: row.index_name || '',
+                                num_rows: parseInt(row.num_rows) || 0,
+                                total_pages: parseInt(row.total_pages) || 0,
+                                expected_pages: parseInt(row.expected_pages) || 0,
+                                bloat_pages: parseInt(row.bloat_pages) || 0,
+                                bloat_ratio: parseFloat(row.bloat_ratio) || 0,
+                                fragmentation_level: parseInt(row.fragmentation_level) || 0
+                            });
+                        } else if (parsedResult.status === 'success') {
+                            // Doğrudan nesne formatı
+                            if (parsedResult.db_name) {
+                                queryResult.push({
+                                    db_name: parsedResult.db_name || '',
+                                    schema_name: parsedResult.schema_name || '',
+                                    table_name: parsedResult.table_name || '',
+                                    index_name: parsedResult.index_name || '',
+                                    num_rows: parseInt(parsedResult.num_rows) || 0,
+                                    total_pages: parseInt(parsedResult.total_pages) || 0,
+                                    expected_pages: parseInt(parsedResult.expected_pages) || 0,
+                                    bloat_pages: parseInt(parsedResult.bloat_pages) || 0,
+                                    bloat_ratio: parseFloat(parsedResult.bloat_ratio) || 0,
+                                    fragmentation_level: parseInt(parsedResult.fragmentation_level) || 0
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsIndexBloat(queryResult);
         } catch (error) {
-            console.error('Error fetching data:', error);
+                        console.error('Error parsing index bloat result:', error);
+                        console.log('Raw index bloat result:', result);
+                    }
+                } else {
+                    console.error('Unexpected index bloat result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid index bloat response format:', data);
+            }
+            setIsLoadingIndexBloatResults(false);
+        } catch (error) {
+            console.error('Error fetching index bloat data:', error);
+            setIsLoadingIndexBloatResults(false);
         }
     };
 
@@ -1122,9 +2137,6 @@ const PostgrePA: React.FC = () => {
         }
     };
 
-    const handleTabChange = (key: string) => {
-        setActiveTab(key);
-    };
 
     const handleDatabaseChange = (value: string) => {
         if (activeTab === '3') {
@@ -1225,23 +2237,118 @@ const PostgrePA: React.FC = () => {
 
     const fetchDatabases = async (nodeName: string) => {
         try {
-            setLoading(true)
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_pg_databases`, {
+            const agentId = `agent_${nodeName}`;
+            
+            const query = `
+                SELECT datname 
+                FROM pg_database 
+                WHERE datistemplate = false 
+                AND datname NOT IN ('postgres', 'template0', 'template1')
+                ORDER BY datname;
+            `;
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_databases',
+                    command: query
+                })
             });
+            
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
+            
             const data = await response.json();
-            const dbNames = data.map((db: Database) => db.datname);
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        // Base64 decode
+                        const decodedValue = atob(result.value);
+                        // JSON parse
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('Parsed databases result:', parsedResult); // Debug için
+                        
+                        const databases: Database[] = [];
+                        
+                        // Agent'dan gelen yanıt formatı farklı olabilir
+                        if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
+                            // Standart format
+                            const rowCount = parsedResult.row_count || 0;
+                            
+                            for (let i = 0; i < rowCount; i++) {
+                                if (parsedResult[`datname_${i}`] !== '') {
+                                    databases.push({
+                                        datname: parsedResult[`datname_${i}`]
+                                    });
+                                }
+                            }
+                        } else if (parsedResult.status === 'success' && parsedResult.rows && parsedResult.rows.length > 0) {
+                            // Alternatif format - rows array'i içinde
+                            parsedResult.rows.forEach((row: any) => {
+                                if (row.datname) {
+                                    databases.push({
+                                        datname: row.datname
+                                    });
+                                }
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.data && parsedResult.data.length > 0) {
+                            // Başka bir alternatif format - data array'i içinde
+                            parsedResult.data.forEach((row: any) => {
+                                if (row.datname) {
+                                    databases.push({
+                                        datname: row.datname
+                                    });
+                                }
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.result && parsedResult.result.length > 0) {
+                            // Başka bir alternatif format - result array'i içinde
+                            parsedResult.result.forEach((row: any) => {
+                                if (row.datname) {
+                                    databases.push({
+                                        datname: row.datname
+                                    });
+                                }
+                            });
+                        } else if (parsedResult.status === 'success' && parsedResult.map) {
+                            // Map formatı - doğrudan map içinde
+                            if (parsedResult.map.datname) {
+                                databases.push({
+                                    datname: parsedResult.map.datname
+                                });
+                            }
+                        } else if (parsedResult.status === 'success' && parsedResult.datname) {
+                            // Doğrudan nesne formatı
+                            databases.push({
+                                datname: parsedResult.datname
+                            });
+                        }
+                        
+                        // Veritabanı isimlerini ayarla
+                        const dbNames = databases.map(db => db.datname);
             setDatabaseNames(dbNames);
-            setLoading(false)
+                        
+                        if (dbNames.length > 0) {
+                            setSelectedDatabase(dbNames[0]);
+                        }
         } catch (error) {
-            console.error('Error fetching data:', error);
+                        console.error('Error parsing databases result:', error);
+                        console.log('Raw databases result:', result);
+                    }
+                } else {
+                    console.error('Unexpected databases result type:', result.type_url);
+                }
+            } else {
+                console.error('Invalid databases response format:', data);
+            }
+        } catch (error) {
+            console.error('Error fetching databases:', error);
         }
     };
 
@@ -1373,8 +2480,16 @@ const PostgrePA: React.FC = () => {
         const fetchData = async () => {
             try {
                 setLoadingClusterName(true)
-                const response = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/statuspostgres`);
-                const clusterData: ClusterData[] = response.data; // API'den gelen veri
+                const response = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/status/postgres`, {
+                headers: {
+                    'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    withCredentials: true
+                });
+
+                if (response.data && response.data.data && Array.isArray(response.data.data)) {
+                    const clusterData: ClusterData[] = response.data.data;
 
                 // Cluster isimlerini çıkarmak için döngü
                 const clusterNames = clusterData.map(obj => Object.keys(obj)[0]);
@@ -1385,9 +2500,13 @@ const PostgrePA: React.FC = () => {
 
                 setData(data);
                 setClusterNames(clusterNames);
+                } else {
+                    console.error('Invalid API response structure');
+                }
                 setLoadingClusterName(false)
             } catch (error) {
                 console.error('Error fetching data:', error);
+                setLoadingClusterName(false)
             }
         };
         fetchData();
@@ -1523,6 +2642,248 @@ const PostgrePA: React.FC = () => {
     };
 
 
+
+    
+    // Alt menü seçildiğinde
+    const handleSubMenuClick = (key: string) => {
+        // Alt menüsü olmayan öğeler için selectedSubMenu'yu temizle
+        if (key === 'user-access-list') {
+            setSelectedSubMenu('');
+            setActiveTab('7');
+            fetchQueryUserAccessList(nodeName);
+            return;
+        }
+
+        // Alt menüsü olan öğeler için normal işlem
+        setSelectedSubMenu(key);
+        
+        // Alt menü öğesine göre activeTab değerini güncelle
+        if (key === 'pgbouncer' || key === 'connections' || key === 'connections-by-app') {
+            setActiveTab('1');
+        } else if (key === 'top-cpu' || key === 'blocking' || key === 'long-running' || key === 'cache-hit') {
+            setActiveTab('2');
+        } else if (key === 'index-usage' || key === 'index-bloat') {
+            setActiveTab('3');
+        } else if (key === 'system') {
+            setActiveTab('4');
+        } else if (key === 'logs') {
+            setActiveTab('5');
+        } else if (key === 'db-stats') {
+            setActiveTab('6');
+        }
+    };
+    
+    // Render fonksiyonları
+    const renderConnectionsContent = () => {
+        switch (selectedSubMenu) {
+            case 'pgbouncer':
+                return (
+                            <div style={{ marginTop: 10 }}>
+                                <Table loading={isLoadingPgBouncerStats} dataSource={pgBouncerStats} columns={pgBouncerColumns} scroll={{ x: 'max-content' }}
+                                    footer={() => (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button onClick={() => fetchPgBouncerStats(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    title={() => (
+                                        <div style={{ display: 'flex', alignItems: 'left' }}>
+                                        </div>
+                                    )} />
+                            </div>
+                );
+            case 'connections':
+                return (
+                    <div style={{ marginTop: 10 }}>
+                        <Table
+                            dataSource={queryResults}
+                            columns={columns}
+                            rowKey={(record) => record.total_connections?.toString() || '0'}
+                            pagination={false}
+                            loading={isLoadingQueryResults}
+                                        footer={() => (
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                                <button onClick={() => fetchQueryResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                    <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                    <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                                </button>
+                                            </div>
+                                        )}
+                                        title={() => (
+                                            <div style={{ display: 'flex', alignItems: 'left' }}>
+                                            </div>
+                                        )} />
+                                </div>
+                );
+            case 'connections-by-app':
+                return (
+                    <div style={{ marginTop: 10 }}>
+                        <Table
+                            dataSource={queryResultsNonIdleConns}
+                            columns={columnsNonIdleConns}
+                            rowKey={(record) => `${record.application_name}-${record.state}`}
+                            pagination={false}
+                            loading={isLoadingNonIdleQueryResults}
+                                        footer={() => (
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                                <button onClick={() => fetchQueryNonIdleConnsResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                    <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                    <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                                </button>
+                                            </div>
+                                        )}
+                                        title={() => (
+                                            <div style={{ display: 'flex', alignItems: 'left' }}>
+                                            </div>
+                            )} />
+                            </div>
+                );
+            default:
+                return (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '300px', flexDirection: 'column' }}>
+                        <InfoCircleOutlined style={{ fontSize: '48px', color: '#1890ff', marginBottom: '16px' }} />
+                        <Text type="secondary">Please select a submenu item from the left sidebar</Text>
+                    </div>
+                );
+        }
+    };
+    
+    const renderQueriesContent = () => {
+        switch (selectedSubMenu) {
+            case 'top-cpu':
+                return (
+                            <div style={{ marginTop: 10 }}>
+                                <Table pagination={false} loading={isLoadingTopCpuQueryResults} dataSource={queryResultsTopCpu} columns={columnsTopCpu} scroll={{ x: 'max-content' }}
+                                    footer={() => (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button onClick={() => fetchQueryTopCpuResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    title={() => (
+                                        <div style={{ display: 'flex', alignItems: 'left' }}>
+                                        </div>
+                                    )} />
+                            </div>
+                );
+            case 'blocking':
+                return (
+                            <div style={{ marginTop: 10 }}>
+                                <Table pagination={false} loading={isLoadingLocsResults} dataSource={queryResultsLocks} columns={columnsLocks} scroll={{ x: 'max-content' }}
+                                    footer={() => (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button onClick={() => fetchQueryLocksResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    title={() => (
+                                        <div style={{ display: 'flex', alignItems: 'left' }}>
+                                        </div>
+                                    )} />
+                            </div>
+                );
+            case 'long-running':
+                return (
+                            <div style={{ marginTop: 10 }}>
+                                <Table pagination={false} loading={isLoadingLongRunningQueryResults} dataSource={queryResultsLongRunning} columns={columnsLongRunning} scroll={{ x: 'max-content' }}
+                                    footer={() => (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button onClick={() => fetchQueryLongRunningResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    title={() => (
+                                        <div style={{ display: 'flex', alignItems: 'left' }}>
+                                        </div>
+                                    )} />
+                            </div>
+                );
+            case 'cache-hit':
+                return (
+                    <div style={{ marginTop: 10 }}>
+                                <Table pagination={false} loading={isLoadingCacheHitQueryResults} dataSource={queryResultsCacheHitRatio} columns={columnsCacheHitRatio} scroll={{ x: 'max-content' }} rowClassName={(record) => {
+                                    return record.hit_cache_ratio < 97 ? 'low-cache-hit-ratio' : '';
+                                }}
+                                    footer={() => (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button onClick={() => fetchQueryCacheHitRatioResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    title={() => (
+                                        <div style={{ display: 'flex', alignItems: 'left' }}>
+                                        </div>
+                                    )} />
+                            </div>
+                );
+            default:
+                return (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '300px', flexDirection: 'column' }}>
+                        <InfoCircleOutlined style={{ fontSize: '48px', color: '#1890ff', marginBottom: '16px' }} />
+                        <Text type="secondary">Please select a submenu item from the left sidebar</Text>
+                    </div>
+                );
+        }
+    };
+    
+    const renderIndexesContent = () => {
+        switch (selectedSubMenu) {
+            case 'index-usage':
+                return (
+                            <div style={{ marginTop: 10 }}>
+                                <Table loading={isLoadingUnusedIndexesResults} dataSource={queryResultsUnusedIndexes} columns={columnsUnusedIndexes} scroll={{ x: 'max-content' }}
+                                    footer={() => (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button onClick={() => fetchQueryUnusedIndexes(nodeName, selectedDatabase)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    title={() => (
+                                        <div style={{ display: 'flex', alignItems: 'left' }}>
+                                        </div>
+                                    )} />
+                            </div>
+                );
+            case 'index-bloat':
+                return (
+                            <div style={{ marginTop: 10 }}>
+                                <Table loading={isLoadingIndexBloatResults} dataSource={queryResultsIndexBloat} columns={columnsIndexBloat} scroll={{ x: 'max-content' }}
+                                    footer={() => (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button onClick={() => fetchQueryIndexBloat(nodeName, selectedDatabase)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
+                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
+                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    title={() => (
+                                        <div style={{ display: 'flex', alignItems: 'left' }}>
+                                        </div>
+                                    )} />
+                            </div>
+                );
+            default:
+                return (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '300px', flexDirection: 'column' }}>
+                        <InfoCircleOutlined style={{ fontSize: '48px', color: '#1890ff', marginBottom: '16px' }} />
+                        <Text type="secondary">Please select a submenu item from the left sidebar</Text>
+                    </div>
+                );
+        }
+    };
+    
     return (
         <div style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '10px' }}>
@@ -1641,190 +3002,79 @@ const PostgrePA: React.FC = () => {
                 </Row>
             </Card>
 
-            <div>
-                <Card>
-                    <Tabs defaultActiveKey="1" onChange={handleTabChange}>
-                        <TabPane tab="Connections" key="1">
-                            {/* İlk Tablo - PgBouncer İstatistikleri */}
-                            <div style={{ marginTop: 10 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>PGBouncer Statistics
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
-                                <Table loading={isLoadingPgBouncerStats} dataSource={pgBouncerStats} columns={pgBouncerColumns} scroll={{ x: 'max-content' }}
-                                    footer={() => (
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button onClick={() => fetchPgBouncerStats(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                            </button>
-                                        </div>
-                                    )}
-                                    title={() => (
-                                        <div style={{ display: 'flex', alignItems: 'left' }}>
-                                        </div>
-                                    )} />
-                            </div>
+            <Layout style={{ background: '#fff', padding: '0', minHeight: '500px' }}>
+                <Sider 
+                    width={250} 
+                    style={{ 
+                        background: '#fff', 
+                        borderRight: '1px solid #f0f0f0',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
+                    }}
+                    collapsible 
+                    collapsed={collapsed} 
+                    onCollapse={setCollapsed}
+                >
+                    <Menu
+                        mode="inline"
+                        selectedKeys={[selectedSubMenu || (activeTab === '7' ? 'user-access-list' : activeTab === '6' ? 'db-stats' : activeTab === '5' ? 'logs' : activeTab === '4' ? 'system' : '')]}
+                        style={{ height: '100%', borderRight: 0 }}
+                    >
+                        <Menu.SubMenu key="connections" icon={<TeamOutlined />} title="Connections">
+                            <Menu.Item key="pgbouncer" onClick={() => handleSubMenuClick('pgbouncer')}>
+                                PgBouncer Statistics
+                            </Menu.Item>
+                            <Menu.Item key="connections" onClick={() => handleSubMenuClick('connections')}>
+                                Connections Summary
+                            </Menu.Item>
+                            <Menu.Item key="connections-by-app" onClick={() => handleSubMenuClick('connections-by-app')}>
+                                Connections by Application
+                            </Menu.Item>
+                        </Menu.SubMenu>
 
-                            {/* İkinci Tablo - Bağlantı Özeti */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
-                                <div style={{ flex: 1, marginRight: '10px' }}> {/* Sağdaki boşluk için marginRight */}
-                                    <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Connections Summary
-                                    </span>} placement="end" style={{ zIndex: 1000 }}>
-                                    </Badge.Ribbon>
-                                    <Table loading={isLoadingQueryResults} pagination={false} dataSource={queryResults} columns={columns} rowKey={record => record.non_idle_connections}
-                                        footer={() => (
-                                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                                <button onClick={() => fetchQueryResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                    <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                    <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                                </button>
-                                            </div>
-                                        )}
-                                        title={() => (
-                                            <div style={{ display: 'flex', alignItems: 'left' }}>
-                                            </div>
-                                        )} />
-                                </div>
-                                {/* Üçüncü Tablo */}
-                                <div style={{ flex: 1 }}> {/* Üçüncü tablo için konteyner.. */}
-                                    <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Connections by Application Name
-                                    </span>} placement="end" style={{ zIndex: 1000 }}>
-                                    </Badge.Ribbon>
-                                    <Table loading={isLoadingNonIdleQueryResults} pagination={false} dataSource={queryResultsNonIdleConns} columns={columnsNonIdleConns} rowKey={record => record.non_idle_connections}
-                                        footer={() => (
-                                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                                <button onClick={() => fetchQueryNonIdleConnsResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                    <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                    <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                                </button>
-                                            </div>
-                                        )}
-                                        title={() => (
-                                            <div style={{ display: 'flex', alignItems: 'left' }}>
-                                            </div>
-                                        )} /> </div>
+                        <Menu.SubMenu key="queries" icon={<BarChartOutlined />} title="Queries">
+                            <Menu.Item key="top-cpu" onClick={() => handleSubMenuClick('top-cpu')}>
+                                Top 10 CPU Intensive Queries
+                            </Menu.Item>
+                            <Menu.Item key="blocking" onClick={() => handleSubMenuClick('blocking')}>
+                                Blocking Queries
+                            </Menu.Item>
+                            <Menu.Item key="long-running" onClick={() => handleSubMenuClick('long-running')}>
+                                Long Running Queries
+                            </Menu.Item>
+                            <Menu.Item key="cache-hit" onClick={() => handleSubMenuClick('cache-hit')}>
+                                Cache Hit Ratio
+                            </Menu.Item>
+                        </Menu.SubMenu>
 
-                            </div>
-                        </TabPane>
+                        <Menu.SubMenu key="indexes" icon={<DatabaseOutlined />} title="Indexes">
+                            <Menu.Item key="index-usage" onClick={() => handleSubMenuClick('index-usage')}>
+                                Index Usage Statistics
+                            </Menu.Item>
+                            <Menu.Item key="index-bloat" onClick={() => handleSubMenuClick('index-bloat')}>
+                                Index Bloat Ratio
+                            </Menu.Item>
+                        </Menu.SubMenu>
 
-                        <TabPane tab="Queries" key="2">
-                            <div style={{ marginTop: 10 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Top 10 CPU Intensive Queries
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
-                                <Table pagination={false} loading={isLoadingTopCpuQueryResults} dataSource={queryResultsTopCpu} columns={columnsTopCpu} scroll={{ x: 'max-content' }}
-                                    footer={() => (
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button onClick={() => fetchQueryTopCpuResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                            </button>
-                                        </div>
-                                    )}
-                                    title={() => (
-                                        <div style={{ display: 'flex', alignItems: 'left' }}>
-                                        </div>
-                                    )} />
-                            </div>
-                            <div style={{ marginTop: 10 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Blocking Queries
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
-                                <Table pagination={false} loading={isLoadingLocsResults} dataSource={queryResultsLocks} columns={columnsLocks} scroll={{ x: 'max-content' }}
-                                    footer={() => (
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button onClick={() => fetchQueryLocksResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                            </button>
-                                        </div>
-                                    )}
-                                    title={() => (
-                                        <div style={{ display: 'flex', alignItems: 'left' }}>
-                                        </div>
-                                    )} />
-
-                            </div>
-                            <div style={{ marginTop: 10 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Long Running Queries
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
-                                <Table pagination={false} loading={isLoadingLongRunningQueryResults} dataSource={queryResultsLongRunning} columns={columnsLongRunning} scroll={{ x: 'max-content' }}
-                                    footer={() => (
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button onClick={() => fetchQueryLongRunningResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                            </button>
-                                        </div>
-                                    )}
-                                    title={() => (
-                                        <div style={{ display: 'flex', alignItems: 'left' }}>
-                                        </div>
-                                    )} />
-
-                            </div>
-                            <div style={{ marginTop: 20 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Cache Hit Ratio
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
-                                <Table pagination={false} loading={isLoadingCacheHitQueryResults} dataSource={queryResultsCacheHitRatio} columns={columnsCacheHitRatio} scroll={{ x: 'max-content' }} rowClassName={(record) => {
-                                    return record.hit_cache_ratio < 97 ? 'low-cache-hit-ratio' : '';
-                                }}
-                                    footer={() => (
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button onClick={() => fetchQueryCacheHitRatioResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                            </button>
-                                        </div>
-                                    )}
-                                    title={() => (
-                                        <div style={{ display: 'flex', alignItems: 'left' }}>
-                                        </div>
-                                    )} />
-                            </div>
-                        </TabPane>
-                        <TabPane tab="Indexes" key="3">
-                            <div style={{ marginTop: 10 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Index Usage Statistics
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
-                                <Table loading={isLoadingUnusedIndexesResults} dataSource={queryResultsUnusedIndexes} columns={columnsUnusedIndexes} scroll={{ x: 'max-content' }}
-                                    footer={() => (
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button onClick={() => fetchQueryUnusedIndexes(nodeName, selectedDatabase)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                            </button>
-                                        </div>
-                                    )}
-                                    title={() => (
-                                        <div style={{ display: 'flex', alignItems: 'left' }}>
-                                        </div>
-                                    )} />
-                            </div>
-
-                            <div style={{ marginTop: 10 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>Index Bloat Ratio
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
-                                <Table loading={isLoadingIndexBloatResults} dataSource={queryResultsIndexBloat} columns={columnsIndexBloat} scroll={{ x: 'max-content' }}
-                                    footer={() => (
-                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                            <button onClick={() => fetchQueryIndexBloat(nodeName, selectedDatabase)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
-                                                <ReloadOutlined style={{ color: 'black', fontSize: '16px' }} />
-                                                <span style={{ marginLeft: '5px', color: 'black' }}>Refresh</span>
-                                            </button>
-                                        </div>
-                                    )}
-                                    title={() => (
-                                        <div style={{ display: 'flex', alignItems: 'left' }}>
-                                        </div>
-                                    )} />
-                            </div>
-                        </TabPane>
-                        <TabPane tab="System Resources" key="4">
+                        <Menu.Item key="system" icon={<SettingOutlined />} onClick={() => handleSubMenuClick('system')}>
+                            System
+                        </Menu.Item>
+                        <Menu.Item key="logs" icon={<FileTextOutlined />} onClick={() => handleSubMenuClick('logs')}>
+                            Logs
+                        </Menu.Item>
+                        <Menu.Item key="db-stats" icon={<DatabaseOutlined />} onClick={() => handleSubMenuClick('db-stats')}>
+                            Database Stats
+                        </Menu.Item>
+                        <Menu.Item key="user-access-list" icon={<UserOutlined />} onClick={() => handleSubMenuClick('user-access-list')}>
+                            User Access List
+                        </Menu.Item>
+                    </Menu>
+                </Sider>
+                <Content style={{ padding: '0 24px', minHeight: '500px' }}>
+                    <Card style={{ marginTop: '16px' }}>
+                        {activeTab === '1' && renderConnectionsContent()}
+                        {activeTab === '2' && renderQueriesContent()}
+                        {activeTab === '3' && renderIndexesContent()}
+                        {activeTab === '4' && (
                             <Row gutter={10}>
                                 <Col span={8}>
                                     <Card title="CPU Usage" style={{ marginTop: 10 }}>
@@ -1864,15 +3114,13 @@ const PostgrePA: React.FC = () => {
                                     </Card>
                                 </Col>
                             </Row>
-                        </TabPane>
-                        <TabPane tab="Logs" key="5">
+                        )}
+                        {activeTab === '5' && (
                             <div>
                                 <Spin spinning={loadingPgLogs}>
-
                                     {pgLogFiles.map(log => (
                                         <Option key={log.name} value={log.name}>{log.name}</Option>
                                     ))}
-
                                 </Spin>
 
                                 <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', alignItems: 'center' }}>
@@ -1915,7 +3163,6 @@ const PostgrePA: React.FC = () => {
                                     }}>
                                         Filter Logs
                                     </Button>
-
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginTop: '10px' }}>
                                     <InfoCircleOutlined style={{ color: 'blue', marginRight: '8px' }} />
@@ -1944,8 +3191,8 @@ const PostgrePA: React.FC = () => {
                                     </>
                                 )}
                             </div>
-                        </TabPane>
-                        <TabPane tab="Database Statistics" key="6">
+                        )}
+                        {activeTab === '6' && (
                             <div style={{ marginTop: 10 }}>
                                 <div style={{ marginTop: 20 }}>
                                     {queryResultsDbStats ? (
@@ -1965,12 +3212,9 @@ const PostgrePA: React.FC = () => {
                                     )}
                                 </div>
                             </div>
-                        </TabPane>
-                        <TabPane tab="User Access List" key="7">
+                        )}
+                        {activeTab === '7' && (
                             <div style={{ marginTop: 10 }}>
-                                <Badge.Ribbon color='#336790ff' text={<span style={{ fontWeight: 'bold' }}>User Access List
-                                </span>} placement="end" style={{ zIndex: 1000 }}>
-                                </Badge.Ribbon>
                                 <Table loading={isLoadingUserAccessListResults} dataSource={queryResultsUserAccessList} columns={UserAccessListColumns} scroll={{ x: 'max-content' }}
                                     footer={() => (
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -1985,14 +3229,11 @@ const PostgrePA: React.FC = () => {
                                         </div>
                                     )} />
                             </div>
-                        </TabPane>
-
-                    </Tabs>
+                        )}
                 </Card>
+                </Content>
+            </Layout>
             </div>
-
-        </div >
-
     );
 };
 

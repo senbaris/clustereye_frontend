@@ -12,7 +12,6 @@ import QueryAnalyzer from './queryAnalyzer';
 import ChangeDataCenter from './changeDataCenter';
 import PostgrePA from './postgrepa';
 import MongoPA from './mongopa';
-import Inventory from './inventory'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DbDeploys from './dbdeployrequests';
 import Dashboard from './generalDashboard';
@@ -23,19 +22,16 @@ import { Provider, useDispatch } from 'react-redux';
 import { store } from './store';
 import { setAuth } from './store/authSlice';
 
-import Keycloak from "keycloak-js";
-import { useKeycloak } from '@react-keycloak/web';
+
 
 
 export interface GeneralProps {
-  keycloak: Keycloak;
 }
 
 
 const queryClient = new QueryClient()
 const App: React.FC = () => {
   const dispatch = useDispatch();
-  const keycloak = useKeycloak()?.keycloak;
 
   useEffect(() => {
     // Sayfa yenilendiğinde auth state'i kontrol et
@@ -62,7 +58,6 @@ const App: React.FC = () => {
                 <Route path="/cassandra" element={<Cassandra />} />
                 <Route path="/mssql" element={<Mssql />} />
                 <Route path="/heatmapdisk" element={<HeatmapDisk />} />
-                <Route path="/inventory" element={<Inventory keycloak={keycloak} />} />
                 <Route path="/queryanalyzer" element={<QueryAnalyzer />} /> {/* URL düzenlemesi */}
                 <Route path="/changedc" element={<ChangeDataCenter />} />
                 <Route path="/postgrepa" element={<PostgrePA />} /> {/* URL düzenlemesi */}

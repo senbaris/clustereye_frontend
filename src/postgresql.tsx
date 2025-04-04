@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import './index.css';
-import { Space, Table, Tag, Badge, Tooltip, Button, DatePicker } from 'antd';
+import { Space, Badge, Tooltip, Button } from 'antd';
 import IconPostgres from './icons/postgresql'
 import axios from 'axios';
 import { useDispatch, useSelector } from 'react-redux';
 import { setHeadStats } from '../redux/redux';
 import SearchContext from './searchContext';
-import { CheckCircleOutlined, WarningOutlined, CloseCircleOutlined, BellTwoTone, PlusOutlined } from '@ant-design/icons';
+import {  PlusOutlined } from '@ant-design/icons';
 import CustomCard from './customCard';
 import runningGif from './assets/Running.gif';
-import moment, { Moment } from 'moment';
-import type { ColumnsType } from 'antd/es/table';
+import moment, {  } from 'moment';
 import { RootState } from './store';
 import AddClusterModal from './components/AddClusterModal';
+import ClusterTopology from './components/ClusterTopology';
 
 
 
@@ -53,6 +53,8 @@ interface PgNodes {
 interface NodeStatus {
     nodename: string;
     isUpdated: boolean;
+    hasAgent: boolean;
+    agentStatus?: string;
 }
 
 interface PostgresConnInfo {
@@ -62,6 +64,39 @@ interface PostgresConnInfo {
         Time: string;
         Valid: boolean;
     } | null;
+}
+
+interface ClusterMetrics {
+    totalNodes: number;
+    activeNodes: number;
+    masterNode: string;
+    avgDiskUsage: number;
+    replicationLag: number;
+    pgBouncerStatus: {
+        running: number;
+        total: number;
+    };
+    pgServiceStatus: {
+        running: number;
+        total: number;
+    };
+    pgBouncerDetails: {
+        nodeName: string;
+        status: string;
+    }[];
+    pgServiceDetails: {
+        nodeName: string;
+        status: string;
+    }[];
+}
+
+interface AgentStatus {
+    connection: string;
+    hostname: string;
+    id: string;
+    ip: string;
+    last_seen: string;
+    status: string;
 }
 
 const Postgres: React.FC = () => {
@@ -74,13 +109,13 @@ const Postgres: React.FC = () => {
     const [data, setData] = useState<Array<ClusterData>>([]);
     const [activeCluster, setActiveCluster] = useState<PgNodes[]>([]);
     const [loading, setLoading] = useState(true);
-    const POLLING_INTERVAL = 5000;
+    const POLLING_INTERVAL = 5000; // 5 saniye
+    const ALARM_POLLING_INTERVAL = 15000; // 15 saniye
     const panelCount = Object.keys(data).length; // Tüm panellerin sayısı
     const { searchTerm } = useContext(SearchContext);
     const [selectedCard, setSelectedCard] = useState<string | null>(null);
     const [nodeStatuses, setNodeStatuses] = useState<NodeStatus[]>([]);
     const [PostgresconnInfos, setPostgresConnInfos] = useState<{ [key: string]: PostgresConnInfo }>({});
-    const [selectedTime, setSelectedTime] = useState<Moment | null>(null);
     const { isLoggedIn } = useSelector((state: RootState) => state.auth);
     const tableRef = useRef<HTMLDivElement>(null);
     const allMembersCount = Array.isArray(data) ? data.reduce((total, cluster) => {
@@ -92,11 +127,9 @@ const Postgres: React.FC = () => {
     }, 0) : 0;
     const [modalVisible, setModalVisible] = useState(false);
 
-    // Keycloak kodu yerine Redux state'ini kullanıyoruz
-    // const keys = useKeycloak()?.keycloak;
-    // useEffect(() => {
-    //     setIsLoggedIn(keys?.authenticated || false)
-    // }, [keys?.authenticated]);
+    // activeCluster ve selectedCard için referans tutalım
+    const activeClusterRef = useRef<PgNodes[]>([]);
+    const selectedCardRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (tableRef.current) {
@@ -104,130 +137,115 @@ const Postgres: React.FC = () => {
         }
     }, [activeCluster]); // activeCluster değiştiğinde tabloya kaydırır
 
+    // Postgres status ve agent status için birleştirilmiş fetch
     useEffect(() => {
-        const apiUrl = `${import.meta.env.VITE_REACT_APP_API_URL}/statuspostgres`;
-        const fetchData = () => {
+        const fetchPostgresAndAgentStatus = async () => {
             try {
-                axios({
-                    method: 'get',
-                    url: apiUrl,
-                }).then(function (response) {
-                    const responseData = response?.data;
-                    if (Array.isArray(responseData)) {
-                        setData(responseData);
-                    } else {
-                        setData([]);
-                        console.warn('API response is not an array:', responseData);
-                    }
-                    setLoading(false);
-                }).catch(error => {
-                    console.error('Error fetching data:', error);
-                    setData([]);
-                    setLoading(false);
+                // Postgres status fetch
+                const postgresResponse = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/status/postgres`, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    withCredentials: true
                 });
+
+                if (postgresResponse.data && postgresResponse.data.data && Array.isArray(postgresResponse.data.data)) {
+                    const dataArray = postgresResponse.data.data;
+                    if (dataArray.length > 0) {
+                        setData(dataArray);
+                    }
+                }
+
+                // Agent status fetch
+                const agentResponse = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/status/agents`, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    withCredentials: true
+                });
+
+                const agents: AgentStatus[] = agentResponse.data.data.agents;
+                const allNodes = new Set<string>();
+                if (postgresResponse.data && postgresResponse.data.data && Array.isArray(postgresResponse.data.data)) {
+                    const dataArray = postgresResponse.data.data;
+                    dataArray.forEach((cluster: ClusterData) => {
+                        const nodes = Object.values(cluster)[0];
+                        nodes.forEach((node: PostgresNode) => {
+                            allNodes.add(node.Hostname);
+                        });
+                    });
+                }
+
+                const newStatuses = Array.from(allNodes).map(nodename => {
+                    const agent = agents.find(a => a.hostname === nodename);
+                    const hasAgent = !!agent;
+                    const isUpdated = agent ? moment(agent.last_seen).isAfter(moment().subtract(2, 'minutes')) : false;
+
+                    return {
+                        nodename,
+                        isUpdated,
+                        hasAgent,
+                        agentStatus: agent?.status
+                    };
+                });
+
+                setNodeStatuses(newStatuses);
+                setLoading(false);
             } catch (error) {
-                console.error('Error in fetch operation:', error);
-                setData([]);
+                console.error('Error fetching data:', error);
                 setLoading(false);
             }
-        }
+        };
 
-        fetchData(); // initial fetch
-        const intervalId = setInterval(fetchData, POLLING_INTERVAL); // subsequent fetches
-
-        return () => clearInterval(intervalId); // cleanup
+        fetchPostgresAndAgentStatus();
+        const intervalId = setInterval(fetchPostgresAndAgentStatus, POLLING_INTERVAL);
+        return () => clearInterval(intervalId);
     }, []);
 
+    // Alarm ve connection info için birleştirilmiş fetch
     useEffect(() => {
-        const intervalId = setInterval(async () => {
+        const fetchAlarmsAndConnInfo = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/checkalarmspostgres`, {
+                // Check alarms
+                const alarmResponse = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/checkalarmspostgres`, {
                     method: 'POST',
-                });
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                fetchConnInfos(); // Alarm durumu değiştiğinde tekrar fetch yaparak güncelleyebiliriz
-            } catch (error) {
-                console.error('Failed to check alarms:', error);
-            }
-        }, 5000); // Her 60 saniyede bir kontrol eder
-
-        return () => clearInterval(intervalId); // Temizleme işlevi
-    }, []);
-
-    const fetchConnInfos = async () => {
-        try {
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/postgresconninfo`);
-            const data = await response.json();
-            
-            // Veri kontrolü ekleyelim
-            if (Array.isArray(data)) {
-                const infoMap = data.reduce((acc, curr) => {
-                    acc[curr.nodename] = curr;
-                    return acc;
-                }, {} as { [key: string]: PostgresConnInfo });
-                setPostgresConnInfos(infoMap);
-            } else {
-                console.warn('Connection info response is not an array:', data);
-                setPostgresConnInfos({});
-            }
-        } catch (error) {
-            console.error('Failed to fetch connection info:', error);
-            setPostgresConnInfos({}); // Hata durumunda boş obje
-        }
-    };
-
-    useEffect(() => {
-        fetchConnInfos();
-    }, []);
-
-    const getFullNodeName = (nodeName: string): string => {
-        if (nodeName.includes(".osp-") && !nodeName.includes(".hepsi.io")) {
-            return `${nodeName}.hepsi.io`;
-        } else if ((nodeName.includes("dpay") || nodeName.includes("altpay")) && !nodeName.includes(".dpay.int")) {
-            return `${nodeName}.dpay.int`;
-        }
-        return `${nodeName}`;
-    };
-
-    const handleSilentAlarm = async (nodeName: string): Promise<void> => {
-        const fullNodeName = getFullNodeName(nodeName);
-        const silentAlarmAPI = `${import.meta.env.VITE_REACT_APP_API_URL}/silentalarmpostgres`;
-
-        try {
-            const response = await fetch(silentAlarmAPI, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    hostname: fullNodeName,
-                    silent: !PostgresconnInfos[fullNodeName]?.send_diskalert,
-                    silence_until: selectedTime ? selectedTime.toISOString() : null,
-                }),
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                console.log('Başarılı:', data);
-
-
-                setPostgresConnInfos((prev) => ({
-                    ...prev,
-                    [fullNodeName]: {
-                        ...prev[fullNodeName],
-                        send_diskalarm: !prev[fullNodeName].send_diskalert,
-                        silence_until: selectedTime ? { Time: selectedTime.toISOString(), Valid: true } : null,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
                     },
-                }));
-            } else {
-                console.error('Hata:', response.statusText);
+                    credentials: 'include'
+                });
+
+                if (alarmResponse.ok) {
+                    // Fetch connection info
+                    const connResponse = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/postgresconninfo`, {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                        },
+                        credentials: 'include'
+                    });
+                    const connData = await connResponse.json();
+                    
+                    if (Array.isArray(connData)) {
+                        const infoMap = connData.reduce((acc, curr) => {
+                            acc[curr.nodename] = curr;
+                            return acc;
+                        }, {} as { [key: string]: PostgresConnInfo });
+                        setPostgresConnInfos(infoMap);
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching alarms and connection info:', error);
             }
-        } catch (error) {
-            console.error('Bir hata oluştu:', error);
-        }
-    };
+        };
+
+        fetchAlarmsAndConnInfo();
+        const intervalId = setInterval(fetchAlarmsAndConnInfo, ALARM_POLLING_INTERVAL);
+        return () => clearInterval(intervalId);
+    }, []);
 
     useEffect(() => {
         // PGBouncer servisi çalışmayan node'ların sayısını hesapla
@@ -271,31 +289,6 @@ const Postgres: React.FC = () => {
         }));// eslint-disable-next-line
     }, [panelCount, nonRunningPGBouncerCount, masterEsenyurtCount, nonRunningPGBouncerCount, nonRunningPGServiceCount])
 
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const response = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/agentstatus`);
-                const nodeData = response.data; // {"mongo-dba-test-01":"00:08:37", "mongo-dba-test-02":"00:08:37", ...}
-
-                const newStatuses = Object.keys(nodeData).map(nodename => {
-                    const nodeTime = moment(nodeData[nodename], "YYYY-MM-DDTHH:mm:ss");
-                    const isUpdatedRecently = nodeTime.isAfter(moment().subtract(2, 'minutes'));
-
-                    return { nodename, isUpdated: isUpdatedRecently };
-                });
-
-                setNodeStatuses(newStatuses);
-            } catch (error) {
-                console.error('Error fetching data: ', error);
-            }
-        };
-
-        fetchData();
-        const intervalId = setInterval(fetchData, POLLING_INTERVAL);
-
-        return () => clearInterval(intervalId);
-    }, []);
-
     function convertToGB(value: string) {
         const [number, unit] = value.split(" ");
         switch (unit) {
@@ -323,7 +316,7 @@ const Postgres: React.FC = () => {
             return {
                 containerClass: 'card-container redalert',
                 iconColor: 'red',
-                tooltip: 'Warning: PG Service, PGBouncer or Node Status is not running!',
+                
             };
         }
 
@@ -341,7 +334,7 @@ const Postgres: React.FC = () => {
             return {
                 containerClass: 'card-container partially',
                 iconColor: 'orange',
-                tooltip: 'Warning: Low disk space detected!',
+                tooltip: 'Cluster Disk Usage: Low free disk space'
             };
         }
 
@@ -354,254 +347,45 @@ const Postgres: React.FC = () => {
     };
 
 
-    const columns: ColumnsType<PgNodes> = [{
-        title: 'Hostname',
-        dataIndex: 'Hostname',
-        key: 'Hostname',
-        fixed: 'left', // Sütunu sola sabitler
-        ellipsis: true,
-        render: (Hostname: string, record: any) => {
-            const isNodeUpdated = record.isUpdated;
-
-            return (
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <span>{Hostname}</span>
-                    <Tooltip title={isNodeUpdated ? "Agent is Running" : "Agent is Not Running"}>
-                        {isNodeUpdated ? (
-                            <img
-                                src={runningGif}
-                                alt="Running"
-                                style={{ width: 16, height: 16, marginLeft: 8, cursor: 'pointer' }}
-                            />
-                        ) : (
-                            <CloseCircleOutlined
-                                style={{ color: 'red', marginLeft: 8, cursor: 'pointer' }}
-                            />
-                        )}
-                    </Tooltip>
-                </div>
-            );
-        },
-    },
-    {
-        title: 'Node Status',
-        dataIndex: 'NodeStatus',
-        key: 'NodeStatus',
-        render: (text: string) => {
-            let color;
-            if (text === 'MASTER' || text === 'SLAVE') {
-                color = 'green';
-            } else {
-                color = 'volcano';
-            }
-
-            return (
-                <Tag color={color}>
-                    {text}
-                </Tag>
-            );
-        },
-    },
-
-    {
-        title: 'IP',
-        dataIndex: 'IP',
-        key: 'IP',
-    },
-    {
-        title: 'Data Center',
-        dataIndex: 'DC',
-        key: 'DC',
-        render: (text: string) => {
-            let color;
-            if (text === 'Esenyurt') {
-                color = 'blue';
-            } else if (text === 'Gebze') {
-                color = 'yellow';
-            } else {
-                color = 'volcano';
-            }
-
-            return (
-                <Tag color={color}>
-                    {text}
-                </Tag>
-            );
-        },
-    },
-    {
-        title: 'Free Disk',
-        dataIndex: 'FreeDisk',
-        key: 'FreeDisk',
-    },
-    {
-        title: 'Free Disk Percentage',
-        dataIndex: 'FDPercent',
-        key: 'FDPercent',
-        render: (freediskpercent: number, record: PostgresNode) => {
-            let color = 'green';
-            let icon = <CheckCircleOutlined style={{ color: 'green', marginRight: 4 }} />;
-
-            if (freediskpercent < 25) {
-                color = 'volcano';
-                icon = <WarningOutlined style={{ color: 'orange', marginRight: 4 }} />;
-            }
-
-            const fullNodeName = getFullNodeName(record.Hostname);
-
-            // silence_until alanını moment nesnesine dönüştür
-            const silenceUntilRaw = PostgresconnInfos[fullNodeName]?.silence_until;
-            const initialDate = silenceUntilRaw && silenceUntilRaw.Valid
-                ? moment.utc(silenceUntilRaw.Time) // UTC'den yerel zamana dönüştür
-                : null;// moment ile dönüştürülmüş hali
-
-            let tooltipMessage = "Alarm On"; // Varsayılan
-
-            // Eğer alarm kapalıysa (send_diskalarm false)
-            if (!PostgresconnInfos[fullNodeName]?.send_diskalert) {
-                // Eğer tarih geçerliyse
-                if (initialDate && initialDate.isValid()) {
-                    tooltipMessage = `Alarm Off Until ${initialDate.format("DD.MM.YYYY HH:mm")}`;
-                } else {
-                    tooltipMessage = "Alarm Off";
-                }
-            }
-
-            return (
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <Tag color={color} style={{ marginRight: 8 }}>
-                        {icon}
-                        {`${freediskpercent}%`}
-                    </Tag>
-                    {isLoggedIn && (
-                        <>
-                            <Tooltip title={tooltipMessage}>
-                                <Button
-                                    type="link"
-                                    icon={
-                                        PostgresconnInfos[fullNodeName]?.send_diskalert ? (
-                                            <BellTwoTone twoToneColor="#52c41a" />
-                                        ) : (
-                                            <BellTwoTone twoToneColor="#ff0000" />
-                                        )
-                                    }
-                                    onClick={() => {
-                                        setSelectedTime(null); // Reset the selectedTime state
-                                        handleSilentAlarm(record.Hostname);
-                                    }}
-                                />
-                            </Tooltip>
-                            <DatePicker
-                                showTime
-                                format="YYYY-MM-DD HH:mm:ss"
-                                placeholder="Alarm Off Until.."
-                                onChange={(value) => setSelectedTime(value ? moment(value.toISOString()) : null)}
-                            />
-                        </>
-                    )}
-                </div>
-            );
-        },
-    },
-
-    {
-        title: 'PostgreSQL Version',
-        dataIndex: 'PGVersion',
-        key: 'PGVersion',
-    },
-    {
-        title: 'PGBouncer Status',
-        dataIndex: 'PGBouncerStatus',
-        key: 'PGBouncerStatus',
-        render: (text: string) => {
-            let color;
-            let backgroundColor;
-            if (text === 'RUNNING') {
-                color = 'green';
-                backgroundColor = '#52c41a'; // Yeşil renk
-            } else if (text === 'FAIL!') {
-                color = 'volcano';
-                backgroundColor = '#ff4d4f'; // Kırmızı renk
-            }
-            return (
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <div style={{ width: '11px', height: '11px', borderRadius: '50%', backgroundColor: backgroundColor, marginRight: '8px' }}></div>
-                    <Tag color={color}>{text}</Tag>
-                </div>
-            );
-        },
-
-    },
-    {
-        title: 'PG Service Status',
-        dataIndex: 'PGServiceStatus',
-        key: 'PGServiceStatus',
-        render: (text: string) => {
-            let color;
-            let backgroundColor;
-            if (text === 'RUNNING') {
-                color = 'green';
-                backgroundColor = '#52c41a'; // Yeşil renk
-            } else if (text === 'FAIL!') {
-                color = 'volcano';
-                backgroundColor = '#ff4d4f'; // Kırmızı renk
-            }
-            return (
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <div style={{ width: '11px', height: '11px', borderRadius: '50%', backgroundColor: backgroundColor, marginRight: '8px' }}></div>
-                    <Tag color={color}>{text}</Tag>
-                </div>
-            );
-        },
-    },
-    {
-        title: 'Replication Lag (Seconds)',
-        dataIndex: 'ReplicationLagSec',
-        key: 'ReplicationLagSec',
-    },
-    ];
-
     const handleCardClick = (clusterNameClicked: string) => {
-        if (selectedCard === clusterNameClicked) {
-            setSelectedCard(''); // Eğer aynı karta tıklanırsa efekti kaldır
-        } else {
-            setSelectedCard(clusterNameClicked); // Farklı bir karta tıklanırsa o kartın ismini sakla
-        }
         handle(clusterNameClicked);
     }
 
     const handle = (ClusterName: string) => {
-        const filteredArray = data.filter(item => ClusterName in item);
-
-        const aa = activeCluster?.[0] && activeCluster?.[0].ClusterName
-        if (aa === ClusterName) {
-            setActiveCluster([])
+        if (selectedCardRef.current === ClusterName) {
+            setActiveCluster([]);
+            setSelectedCard(null);
+            activeClusterRef.current = [];
+            selectedCardRef.current = null;
+        } else {
+            const filteredArray = data.filter(item => ClusterName in item);
+            if (filteredArray.length > 0) {
+                const dataSource = filteredArray[0][ClusterName].map((node) => {
+                    const nodeStatus = nodeStatuses.find(status => status.nodename === node.Hostname);
+                    return {
+                        ClusterName: ClusterName,
+                        key: node.Hostname,
+                        Hostname: node.Hostname,
+                        NodeStatus: node.NodeStatus,
+                        IP: node.IP,
+                        DC: node.DC,
+                        FreeDisk: node.FreeDisk,
+                        FDPercent: node.FDPercent,
+                        PGVersion: node.PGVersion,
+                        PGBouncerStatus: node.PGBouncerStatus,
+                        PGServiceStatus: node.PGServiceStatus,
+                        dbAgentStatus: nodeStatus?.hasAgent ? 'RUNNING' : 'NOT_RUNNING',
+                        ReplicationLagSec: node.ReplicationLagSec || '0',
+                        isUpdated: nodeStatus?.isUpdated || false,
+                    };
+                });
+                setActiveCluster(dataSource);
+                setSelectedCard(ClusterName);
+                activeClusterRef.current = dataSource;
+                selectedCardRef.current = ClusterName;
+            }
         }
-        else {
-            const dataSource = filteredArray[0][ClusterName].map((node) => {
-                // `isUpdated` değerini almak için, `nodeStatuses` gibi bir yapıdan nodename eşlemesi yapıyoruz
-                const isUpdated = nodeStatuses.find(status => status.nodename === node.Hostname)?.isUpdated || false;
-
-                return {
-                    ClusterName: ClusterName,
-                    key: node.Hostname,
-                    Hostname: node.Hostname,
-                    NodeStatus: node.NodeStatus,
-                    IP: node.IP,
-                    DC: node.DC,
-                    FreeDisk: node.FreeDisk,
-                    FDPercent: node.FDPercent,
-                    PGVersion: node.PGVersion,
-                    PGBouncerStatus: node.PGBouncerStatus,
-                    PGServiceStatus: node.PGServiceStatus,
-                    dbAgentStatus: node.dbAgentStatus,
-                    ReplicationLagSec: node.ReplicationLagSec,
-                    isUpdated: isUpdated, // `isUpdated` alanını ekliyoruz
-                };
-            });
-            setActiveCluster(dataSource)
-        }
-    }
+    };
 
     const filteredDataSearch = React.useMemo(() => {
         let results = data;
@@ -616,6 +400,31 @@ const Postgres: React.FC = () => {
         return results;
     }, [data, searchTerm]);
 
+    const getClusterMetrics = (nodes: PostgresNode[]): ClusterMetrics => {
+        return {
+            totalNodes: nodes.length,
+            activeNodes: nodes.filter(node => node.NodeStatus !== 'FAIL').length,
+            masterNode: nodes.find(node => node.NodeStatus === 'MASTER')?.Hostname || '',
+            avgDiskUsage: Math.round(100 - (nodes.reduce((acc, node) => acc + parseFloat(node.FDPercent), 0) / nodes.length)),
+            replicationLag: Math.max(...nodes.map(node => parseFloat(node.ReplicationLagSec || '0'))),
+            pgBouncerStatus: {
+                running: nodes.filter(node => node.PGBouncerStatus === 'RUNNING').length,
+                total: nodes.length
+            },
+            pgServiceStatus: {
+                running: nodes.filter(node => node.PGServiceStatus === 'RUNNING').length,
+                total: nodes.length
+            },
+            pgBouncerDetails: nodes.map(node => ({
+                nodeName: node.Hostname,
+                status: node.PGBouncerStatus
+            })),
+            pgServiceDetails: nodes.map(node => ({
+                nodeName: node.Hostname,
+                status: node.PGServiceStatus
+            }))
+        };
+    };
 
     return (
         <>
@@ -665,65 +474,45 @@ const Postgres: React.FC = () => {
                                             const clusterName = Object.keys(cluster)[0];
                                             const nodes: PostgresNode[] = cluster[clusterName];
                                             const panelColorClass = getPanelHeaderColorClass(nodes);
+                                            const metrics = getClusterMetrics(nodes);
 
-                                            // Eğer nodes içindeki herhangi bir Hostname son 2 dakika içinde güncellenmemişse, isNodeUpdated false olacak
-                                            const isNodeUpdated = nodes.every(node =>
-                                                nodeStatuses.find(status => status.nodename === node.Hostname)?.isUpdated ?? false
-                                            );
+                                            // Node'ların agent durumunu kontrol et
+                                            const isNodeUpdated = nodes.every(node => {
+                                                const nodeStatus = nodeStatuses.find(status => status.nodename === node.Hostname);
+                                                return nodeStatus?.isUpdated ?? false;
+                                            });
+
+                                            const hasAllAgents = nodes.every(node => {
+                                                const nodeStatus = nodeStatuses.find(status => status.nodename === node.Hostname);
+                                                return nodeStatus?.hasAgent ?? false;
+                                            });
 
                                             return (
                                                 <Tooltip
-                                                    title={panelColorClass.tooltip} // Tooltip mesajını burada kullanıyoruz
+                                                    title={panelColorClass.tooltip}
                                                     placement="top"
                                                     color="red"
                                                     key={`tooltip${index}`}
                                                 >
                                                     <div
                                                         key={`div1${index}`}
-                                                        className={`${panelColorClass.containerClass} ${selectedCard === clusterName ? 'bn6' : ''
-                                                            }`}
+                                                        className={`${panelColorClass.containerClass} ${selectedCard === clusterName ? 'bn6' : ''}`}
                                                         style={{ margin: 4, cursor: 'pointer' }}
                                                     >
                                                         <Badge
                                                             key={`badge${index}`}
-                                                            status={isNodeUpdated ? 'processing' : 'error'}
-                                                            color={isNodeUpdated ? 'green' : 'red'}
+                                                            status={isNodeUpdated && hasAllAgents ? 'processing' : 'error'}
+                                                            color={isNodeUpdated && hasAllAgents ? 'green' : 'red'}
                                                             dot
                                                             offset={[-2, 2]}
                                                         >
                                                             <CustomCard
                                                                 iconColor={panelColorClass.iconColor}
                                                                 clusterName={clusterName}
+                                                                metrics={metrics}
                                                                 key={`card1${index}`}
                                                                 onClick={() => handleCardClick(clusterName)}
-                                                            >
-                                                                <div
-                                                                    key={`div2${index}`}
-                                                                    style={{
-                                                                        display: 'flex',
-                                                                        alignItems: 'center',
-                                                                    }}
-                                                                >
-                                                                    <IconPostgres
-                                                                        key={`icon1${index}`}
-                                                                        size="25"
-                                                                        color={panelColorClass.iconColor}
-                                                                    />
-                                                                    <span
-                                                                        key={`span1${index}`}
-                                                                        style={{
-                                                                            marginLeft: 8,
-                                                                            whiteSpace: 'nowrap',
-                                                                            overflow: 'hidden',
-                                                                            fontSize: '12px',
-                                                                            textOverflow: 'ellipsis',
-                                                                            maxWidth: 'calc(100% - 25px - 8px)',
-                                                                        }}
-                                                                    >
-                                                                        {clusterName}
-                                                                    </span>
-                                                                </div>
-                                                            </CustomCard>
+                                                            />
                                                         </Badge>
                                                     </div>
                                                 </Tooltip>
@@ -738,21 +527,12 @@ const Postgres: React.FC = () => {
 
             {activeCluster.length > 0 && (
                 <div ref={tableRef}>
-                    <Badge.Ribbon
-                        color="#336790ff"
-                        text={<span style={{ fontWeight: 'bold' }}>{selectedCard}</span>}
-                        placement="end"
-                        style={{ zIndex: 1000 }}
-                    />
-                    <Table
-                        className="textclr"
-                        style={{ marginTop: 10 }}
-                        columns={columns}
-                        dataSource={activeCluster}
-                        pagination={false}
-                        scroll={{ x: 'max-content' }} // Yatay kaydırma
-                        title={() => <div style={{ display: 'flex', alignItems: 'left' }} />}
-                    />
+                    <div style={{ marginTop: 16 }}>
+                        <ClusterTopology 
+                            nodes={activeCluster}
+                            key={`topology-${selectedCard}-${activeCluster.length}`} 
+                        />
+                    </div>
                 </div>
             )}
 
