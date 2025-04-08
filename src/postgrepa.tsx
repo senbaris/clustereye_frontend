@@ -6,6 +6,7 @@ import { CopyOutlined, ReloadOutlined, InfoCircleOutlined, DownloadOutlined, Dat
 import { Dayjs } from 'dayjs';
 import CountUp from 'react-countup';
 import MonacoEditor from './monacoeditor';
+import { Alert } from 'antd';
 
 
 const { Option } = Select;
@@ -34,14 +35,6 @@ interface ClusterData {
     [key: string]: Node[];
 }
 
-interface SystemInfo {
-    cpu_cores: number;
-    cpu_type: string;
-    os_distribution: string;
-    os_version: string;
-    uptime: number;
-    ram_total: number;
-}
 
 interface QueryResultDbStats {
     datid: number;
@@ -155,14 +148,6 @@ interface QueryResult {
     mean?: number;
     cpu_portion_pctg?: number;
     short_query?: string;
-}
-
-interface CpuUsage {
-    cpu_usage: number;
-}
-
-interface MemoryUsage {
-    memory_usage: number;
 }
 
 
@@ -699,6 +684,21 @@ const UserAccessListColumns = [
     },
 ];
 
+interface SystemMetrics {
+    cpu_usage: number;
+    cpu_cores: number;
+    memory_usage: number;
+    total_memory: number;
+    free_memory: number;
+    load_average_1m: number;
+    load_average_5m: number;
+    load_average_15m: number;
+    total_disk: number;
+    free_disk: number;
+    os_version: string;
+    kernel_version: string;
+    uptime: number;
+}
 
 const PostgrePA: React.FC = () => {
     const [loading, setLoading] = useState(false);
@@ -718,10 +718,6 @@ const PostgrePA: React.FC = () => {
     const [queryResultsUserAccessList, setQueryResultsUserAccessList] = useState<QueryResultUserAccessList[]>([]);
     const [queryResultsLongRunning, setQueryResultsLongRunning] = useState<QueryResultLongRunning[]>([]);
     const [queryResultsLocks, setQueryResultsLocks] = useState<QueryResultLock[]>([]);
-    const [queryResultsCpuUsage, setQueryResultsCpuUsage] = useState<CpuUsage>({ cpu_usage: 0 });
-    const [queryResultsMemoryUsage, setQueryResultsMemoryUsage] = useState<MemoryUsage>({ memory_usage: 0 });
-    const [loadAverage, setLoadAverage] = useState({ cpuCount: 0, load1: 0, load5: 0, load15: 0 });
-    const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
     const [queryResultsUnusedIndexes, setQueryResultsUnusedIndexes] = useState<QueryResultUnusedIndexes[]>([]);
     const [queryResultsIndexBloat, setQueryResultsIndexBloat] = useState<QueryResultIndexBloat[]>([]);
     const [queryResultsDbStats, setQueryResultsDbStats] = useState<QueryResultDbStats[]>([]);
@@ -759,6 +755,8 @@ const PostgrePA: React.FC = () => {
     // Yeni state değişkenleri
     const [selectedSubMenu, setSelectedSubMenu] = useState<string>('');
     const [collapsed, setCollapsed] = useState<boolean>(false);
+    const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
+    const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
 
     const formatLogContent = (content: string) => {
         return content.split('\n')
@@ -825,11 +823,11 @@ const PostgrePA: React.FC = () => {
                         (SELECT setting AS max_connections FROM pg_settings WHERE name = 'max_connections') B;`
                 })
             });
-    
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-    
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -840,7 +838,7 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed result:', parsedResult); // Debug için
-                        
+
                         // Sorgu sonucunu array formatına dönüştür
                         const queryResult = {
                             total_connections: parsedResult.total_connections || 0,
@@ -848,7 +846,7 @@ const PostgrePA: React.FC = () => {
                             max_connections: parsedResult.max_connections || 0,
                             connections_utilization_pctg: parsedResult.connections_utilization_pctg || 0
                         };
-                        
+
                         // Array formatında state'e kaydet
                         setQueryResults([queryResult]);
                     } catch (error) {
@@ -906,11 +904,11 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed result:', parsedResult); // Debug için
-                        
+
                         // Yeni veri yapısını işle
                         const queryResult = [];
                         const rowCount = parsedResult.row_count || 0;
-                        
+
                         for (let i = 0; i < rowCount; i++) {
                             if (parsedResult[`application_name_${i}`] !== '') {
                                 queryResult.push({
@@ -920,7 +918,7 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsNonIdleConns(queryResult);
                     } catch (error) {
                         console.error('Error parsing result:', error);
@@ -943,7 +941,7 @@ const PostgrePA: React.FC = () => {
         try {
             setIsLoadingCacheHitQueryResults(true);
             const agentId = `agent_${nodeName}`;
-            
+
             const query = `
                 WITH statements AS (
                     SELECT * FROM pg_stat_statements pss
@@ -960,7 +958,7 @@ const PostgrePA: React.FC = () => {
                 ORDER BY calls DESC, hit_cache_ratio ASC
                 LIMIT 20;
             `;
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -973,11 +971,11 @@ const PostgrePA: React.FC = () => {
                     command: query
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -988,7 +986,7 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed result:', parsedResult); // Debug için
-                        
+
                         // Hata kontrolü
                         if (parsedResult.status === 'error' && parsedResult.message && parsedResult.message.includes('pg_stat_statements')) {
                             // pg_stat_statements extension'ı yüklü değil
@@ -1009,15 +1007,15 @@ const PostgrePA: React.FC = () => {
                             setIsLoadingCacheHitQueryResults(false);
                             return;
                         }
-                        
+
                         // Sorgu sonucunu array formatına dönüştür
                         const queryResult: QueryResultCacheHitRatio[] = [];
-                        
+
                         // Agent'dan gelen yanıt formatı farklı olabilir
                         if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
                             // Standart format
                             const rowCount = parsedResult.row_count || 0;
-                            
+
                             for (let i = 0; i < rowCount; i++) {
                                 if (parsedResult[`rolname_${i}`] !== '') {
                                     queryResult.push({
@@ -1091,7 +1089,7 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsCacheHitRatio(queryResult);
                     } catch (error) {
                         console.error('Error parsing result:', error);
@@ -1114,11 +1112,11 @@ const PostgrePA: React.FC = () => {
         try {
             setIsLoadingUserAccessListResults(true);
             const agentId = `agent_${nodeName}`;
-            
+
             const query = `
                 SELECT usename, usesuper FROM pg_user;
             `;
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -1131,11 +1129,11 @@ const PostgrePA: React.FC = () => {
                     command: query
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -1146,14 +1144,14 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed user access list result:', parsedResult); // Debug için
-                        
+
                         const queryResult: QueryResultUserAccessList[] = [];
-                        
+
                         // Agent'dan gelen yanıt formatı farklı olabilir
                         if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
                             // Standart format
                             const rowCount = parsedResult.row_count || 0;
-                            
+
                             for (let i = 0; i < rowCount; i++) {
                                 if (parsedResult[`usename_${i}`] !== '') {
                                     queryResult.push({
@@ -1202,7 +1200,7 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsUserAccessList(queryResult);
         } catch (error) {
                         console.error('Error parsing user access list result:', error);
@@ -1226,7 +1224,7 @@ const PostgrePA: React.FC = () => {
         try {
             setIsLoadingLongRunningQueryResults(true);
             const agentId = `agent_${nodeName}`;
-            
+
             const query = `
                 SELECT 
                     datname as datName,
@@ -1246,7 +1244,7 @@ const PostgrePA: React.FC = () => {
                 AND usename != 'replica'
                 ORDER BY duration DESC;
             `;
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -1259,11 +1257,11 @@ const PostgrePA: React.FC = () => {
                     command: query
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -1274,15 +1272,15 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed result:', parsedResult); // Debug için
-                        
+
                         // Sorgu sonucunu array formatına dönüştür
                         const queryResult: QueryResultLongRunning[] = [];
-                        
+
                         // Agent'dan gelen yanıt formatı farklı olabilir
                         if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
                             // Standart format
                             const rowCount = parsedResult.row_count || 0;
-                            
+
                             for (let i = 0; i < rowCount; i++) {
                                 if (parsedResult[`datName_${i}`] !== '') {
                                     queryResult.push({
@@ -1380,7 +1378,7 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsLongRunning(queryResult);
                     } catch (error) {
                         console.error('Error parsing result:', error);
@@ -1403,7 +1401,7 @@ const PostgrePA: React.FC = () => {
         try {
             setIsLoadingLocksResults(true);
             const agentId = `agent_${nodeName}`;
-            
+
             const query = `WITH lock_info AS (
                      SELECT 
                          pg_locks.locktype,
@@ -1463,7 +1461,7 @@ const PostgrePA: React.FC = () => {
                      AND blocking.granted = true
                  ORDER BY 
                      waiting.query_start;`;
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -1476,11 +1474,11 @@ const PostgrePA: React.FC = () => {
                     command: query
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -1491,11 +1489,11 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed result:', parsedResult); // Debug için
-                        
+
                         // Sorgu sonucunu array formatına dönüştür
                         const queryResult = [];
                         const rowCount = parsedResult.row_count || 0;
-                        
+
                         for (let i = 0; i < rowCount; i++) {
                             if (parsedResult[`waiting_query_${i}`] !== '') {
                                 queryResult.push({
@@ -1515,9 +1513,9 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsLocks(queryResult);
-        } catch (error) {
+                    } catch (error) {
                         console.error('Error parsing result:', error);
                         console.log('Raw result:', result);
                     }
@@ -1534,79 +1532,92 @@ const PostgrePA: React.FC = () => {
         }
     };
 
-    const fetchCPUUsage = async (nodeName: string) => {
-        try {
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_cpu_usage`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ nodeName: nodeName }),
-            });
-            if (!response.ok) {
-                throw new Error('API response not ok');
-            }
-            const data = await response.json();
-            setQueryResultsCpuUsage(data)
-        } catch (error) {
-            console.error('Error fetching data:', error);
+    const fetchSystemMetrics = async (nodeNameParam: string) => {
+        if (!nodeNameParam) {
+            console.error('METRICS: fetchSystemMetrics called without nodeName');
+            return;
         }
-    };
 
-    const fetchMemoryUsage = async (nodeName: string) => {
+        console.log(`METRICS: Starting to fetch system metrics for node ${nodeNameParam}`);
+        
+        // Set loading state
+        setIsLoadingMetrics(true);
+        
         try {
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_memory_usage`, {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            
+            const agentId = `agent_${nodeNameParam}`;
+            const url = `${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/metrics`;
+            console.log(`METRICS: Fetching metrics from URL: ${url}`);
+            
+            const response = await fetch(url, { 
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
-                body: JSON.stringify({ nodeName: nodeName }),
+                credentials: 'include',
+                signal: controller.signal 
             });
+            clearTimeout(timeoutId);
+            
+            console.log(`METRICS: Received response with status ${response.status}`);
+            
             if (!response.ok) {
-                throw new Error('API response not ok');
+                throw new Error(`Error fetching metrics: ${response.status} ${response.statusText}`);
             }
+            
             const data = await response.json();
-            setQueryResultsMemoryUsage(data)
-        } catch (error) {
-            console.error('Error fetching data:', error);
-        }
-    };
-
-    const fetchLoadAverage = async (nodeName: string) => {
-        try {
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_load_average`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ nodeName: nodeName }),
+            console.log('METRICS: Raw response data:', JSON.stringify(data, null, 2));
+            
+            // Metrics data from response (expecting data.metrics structure)
+            const metricsData = data.metrics || data;
+            
+            // Directly set the metrics state without delay or timeout
+            setSystemMetrics({
+                cpu_usage: metricsData?.cpu_usage || metricsData?.cpu_percentage || 0,
+                cpu_cores: metricsData?.cpu_cores || 0,
+                memory_usage: metricsData?.memory_usage || metricsData?.memory_percentage || 0,
+                total_memory: metricsData?.total_memory || 0,
+                free_memory: metricsData?.free_memory || 0,
+                load_average_1m: metricsData?.load_average_1m || 0,
+                load_average_5m: metricsData?.load_average_5m || 0,
+                load_average_15m: metricsData?.load_average_15m || 0,
+                total_disk: metricsData?.total_disk || 0,
+                free_disk: metricsData?.free_disk || 0,
+                os_version: metricsData?.os_version || 'Unknown',
+                kernel_version: metricsData?.kernel_version || 'Unknown',
+                uptime: metricsData?.uptime || 0
             });
-            if (!response.ok) {
-                throw new Error('API response not ok');
-            }
-            const data = await response.json();
-            setLoadAverage(data)
+            
+            console.log('METRICS: Updated system metrics state');
         } catch (error) {
-            console.error('Error fetching data:', error);
-        }
-    };
-
-    const fetchSystemInfo = async (nodeName: string) => {
-        try {
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/get_system_info`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ nodeName: nodeName }),
+            console.error('METRICS: Error fetching system metrics:', error);
+            
+            // Show error message to user
+            message.error(`Failed to load metrics: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            
+            // Set default metrics in case of error
+            setSystemMetrics({
+                cpu_usage: 0,
+                cpu_cores: 0,
+                memory_usage: 0,
+                total_memory: 0,
+                free_memory: 0,
+                load_average_1m: 0,
+                load_average_5m: 0,
+                load_average_15m: 0,
+                total_disk: 0,
+                free_disk: 0,
+                os_version: 'Error',
+                kernel_version: 'Error',
+                uptime: 0
             });
-            if (!response.ok) {
-                throw new Error('API response not ok');
-            }
-            const data = await response.json();
-            setSystemInfo(data);
-        } catch (error) {
-            console.error('Error fetching data:', error);
+        } finally {
+            // Always set loading state to false when done
+            setIsLoadingMetrics(false);
+            console.log('METRICS: Fetch operation completed');
         }
     };
 
@@ -1625,17 +1636,18 @@ const PostgrePA: React.FC = () => {
     };
 
     const fetchQueryTopCpuResults = useCallback(async (nodeName: string) => {
+        if (!nodeName) return;
         try {
             setIsLoadingTopCpuQueryResults(true);
             const agentId = `agent_${nodeName}`;
-            
+
             // PostgreSQL versiyonunu kontrol et
             const selectedNodeInfo = nodeInfo.find(node => node.name === nodeName);
             const PGVersion = selectedNodeInfo ? selectedNodeInfo.PGVersion : 'unknown';
-            
+
             // Versiyon numarasını çıkar (örn: "14.7" -> 14)
             const pgVersionMajor = parseInt(PGVersion.split('.')[0]);
-            
+
             // Versiyona göre sorgu seç
             let query;
             if (pgVersionMajor < 13) {
@@ -1643,7 +1655,7 @@ const PostgrePA: React.FC = () => {
             } else {
                 query = `SELECT  pu.usename, pd.datname as db_name, round((pss.total_exec_time + pss.total_plan_time)::numeric, 2) as total_time, pss.calls, round((pss.mean_exec_time + pss.mean_plan_time)::numeric, 2) as mean, round((100 * (pss.total_exec_time + pss.total_plan_time) / sum((pss.total_exec_time + pss.total_plan_time)::numeric) OVER ())::numeric, 2) as cpu_portion_pctg, pss.query as short_query FROM pg_stat_statements pss JOIN pg_database pd ON pd.oid = pss.dbid JOIN pg_user pu ON pu.usesysid = pss.userid where pd.datname not in ('pmm_user','postgres') ORDER BY (pss.total_exec_time + pss.total_plan_time) DESC LIMIT 10;`;
             }
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -1656,25 +1668,21 @@ const PostgrePA: React.FC = () => {
                     command: query
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
                 if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
                     try {
-                        // Base64 decode
                         const decodedValue = atob(result.value);
-                        // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
-                        console.log('Parsed result:', parsedResult); // Debug için
-                        
-                        // Hata kontrolü
+                        console.log('Parsed result:', parsedResult);
+
                         if (parsedResult.status === 'error' && parsedResult.message && parsedResult.message.includes('pg_stat_statements')) {
-                            // pg_stat_statements extension'ı yüklü değil
                             message.error({
                                 content: (
                                     <div>
@@ -1689,14 +1697,12 @@ const PostgrePA: React.FC = () => {
                                 duration: 10
                             });
                             setQueryResultsTopCpu([]);
-                            setIsLoadingTopCpuQueryResults(false);
                             return;
                         }
-                        
-                        // Sorgu sonucunu array formatına dönüştür
+
                         const queryResult = [];
                         const rowCount = parsedResult.row_count || 0;
-                        
+
                         for (let i = 0; i < rowCount; i++) {
                             if (parsedResult[`usename_${i}`] !== '') {
                                 queryResult.push({
@@ -1710,24 +1716,23 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsTopCpu(queryResult);
                     } catch (error) {
                         console.error('Error parsing result:', error);
-                        console.log('Raw result:', result);
+                        message.error('Error parsing query result');
+                        setQueryResultsTopCpu([]);
                     }
-                } else {
-                    console.error('Unexpected result type:', result.type_url);
                 }
-            } else {
-                console.error('Invalid response format:', data);
             }
-            setIsLoadingTopCpuQueryResults(false);
         } catch (error) {
             console.error('Error fetching data:', error);
+            message.error('Error fetching query results');
+            setQueryResultsTopCpu([]);
+        } finally {
             setIsLoadingTopCpuQueryResults(false);
         }
-    }, [nodeInfo]);
+    }, [nodeInfo]); // Sadece nodeInfo'yu dependency olarak ekliyoruz
 
     const fetchPgBouncerStats = async (nodeName: string) => {
         try {
@@ -1754,7 +1759,7 @@ const PostgrePA: React.FC = () => {
         try {
             setIsLoadingUnusedIndexesResults(true);
             const agentId = `agent_${nodeName}`;
-            
+
             const query = `
                 select 'regular index' as indextype,
                     stats_child.schemaname,
@@ -1786,7 +1791,7 @@ const PostgrePA: React.FC = () => {
                 ) 
                 and stats_child.relname not like '%template';
             `;
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -1800,11 +1805,11 @@ const PostgrePA: React.FC = () => {
                     database: dbName
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -1815,14 +1820,14 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed unused indexes result:', parsedResult); // Debug için
-                        
+
                         const queryResult: QueryResultUnusedIndexes[] = [];
-                        
+
                         // Agent'dan gelen yanıt formatı farklı olabilir
                         if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
                             // Standart format
                             const rowCount = parsedResult.row_count || 0;
-                            
+
                             for (let i = 0; i < rowCount; i++) {
                                 if (parsedResult[`indextype_${i}`] !== '') {
                                     queryResult.push({
@@ -1901,7 +1906,7 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsUnusedIndexes(queryResult);
         } catch (error) {
                         console.error('Error parsing unused indexes result:', error);
@@ -1924,7 +1929,7 @@ const PostgrePA: React.FC = () => {
         try {
             setIsLoadingIndexBloatResults(true);
             const agentId = `agent_${nodeName}`;
-            
+
             const query = `
                 WITH index_bloat AS (
                     SELECT
@@ -1963,7 +1968,7 @@ const PostgrePA: React.FC = () => {
                 WHERE bloat_pages > 0
                 ORDER BY bloat_ratio DESC;
             `;
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -1977,11 +1982,11 @@ const PostgrePA: React.FC = () => {
                     database: dbName
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -1992,14 +1997,14 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed index bloat result:', parsedResult); // Debug için
-                        
+
                         const queryResult: QueryResultIndexBloat[] = [];
-                        
+
                         // Agent'dan gelen yanıt formatı farklı olabilir
                         if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
                             // Standart format
                             const rowCount = parsedResult.row_count || 0;
-                            
+
                             for (let i = 0; i < rowCount; i++) {
                                 if (parsedResult[`db_name_${i}`] !== '') {
                                     queryResult.push({
@@ -2096,7 +2101,7 @@ const PostgrePA: React.FC = () => {
                                 });
                             }
                         }
-                        
+
                         setQueryResultsIndexBloat(queryResult);
         } catch (error) {
                         console.error('Error parsing index bloat result:', error);
@@ -2156,10 +2161,7 @@ const PostgrePA: React.FC = () => {
     const handleNodeChange = (value: string) => {
         setNodeName(value);
         if (activeTab === '4') {
-            fetchMemoryUsage(value);
-            fetchCPUUsage(value);
-            fetchLoadAverage(value);
-            fetchSystemInfo(value);
+            fetchSystemMetrics(value);
         }
     };
 
@@ -2238,7 +2240,7 @@ const PostgrePA: React.FC = () => {
     const fetchDatabases = async (nodeName: string) => {
         try {
             const agentId = `agent_${nodeName}`;
-            
+
             const query = `
                 SELECT datname 
                 FROM pg_database 
@@ -2246,7 +2248,7 @@ const PostgrePA: React.FC = () => {
                 AND datname NOT IN ('postgres', 'template0', 'template1')
                 ORDER BY datname;
             `;
-            
+
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
@@ -2259,11 +2261,11 @@ const PostgrePA: React.FC = () => {
                     command: query
                 })
             });
-            
+
             if (!response.ok) {
                 throw new Error('API response not ok');
             }
-            
+
             const data = await response.json();
             if (data.status === 'success' && data.result) {
                 const result = data.result;
@@ -2274,14 +2276,14 @@ const PostgrePA: React.FC = () => {
                         // JSON parse
                         const parsedResult = JSON.parse(decodedValue);
                         console.log('Parsed databases result:', parsedResult); // Debug için
-                        
+
                         const databases: Database[] = [];
-                        
+
                         // Agent'dan gelen yanıt formatı farklı olabilir
                         if (parsedResult.status === 'success' && parsedResult.row_count > 0) {
                             // Standart format
                             const rowCount = parsedResult.row_count || 0;
-                            
+
                             for (let i = 0; i < rowCount; i++) {
                                 if (parsedResult[`datname_${i}`] !== '') {
                                     databases.push({
@@ -2329,11 +2331,11 @@ const PostgrePA: React.FC = () => {
                                 datname: parsedResult.datname
                             });
                         }
-                        
+
                         // Veritabanı isimlerini ayarla
                         const dbNames = databases.map(db => db.datname);
             setDatabaseNames(dbNames);
-                        
+
                         if (dbNames.length > 0) {
                             setSelectedDatabase(dbNames[0]);
                         }
@@ -2385,95 +2387,142 @@ const PostgrePA: React.FC = () => {
 
 
     useEffect(() => {
-        let intervalId: number | null = null;
-
-        // Geri sayımı her saniye azalt
-        intervalId = window.setInterval(() => {
-            setCountdown(prevCountdown => {
-                // Geri sayım sıfıra ulaştığında verileri yenile
-                if (prevCountdown === 1) {
-                    switch (activeTab) {
-                        case '1':
-                            fetchPgBouncerStats(nodeName);
-                            fetchQueryResults(nodeName);
-                            break;
-                        case '2':
-                            fetchQueryTopCpuResults(nodeName);
-                            fetchQueryCacheHitRatioResults(nodeName);
-                            fetchQueryLongRunningResults(nodeName);
-                            fetchQueryLocksResults(nodeName)
-                            break;
-                        case '3':
-                            fetchQueryUnusedIndexes(nodeName, selectedDatabase);
-                            fetchQueryIndexBloat(nodeName, selectedDatabase)
-                            break;
-                        case '4':
-                            fetchCPUUsage(nodeName)
-                            fetchMemoryUsage(nodeName)
-                            fetchLoadAverage(nodeName)
-                            fetchSystemInfo(nodeName);
-                            break;
-                        case '6':
-                            fetchQueryDbStats(nodeName, selectedDatabase);
-                            break;
-                        case '7':
-                            fetchQueryUserAccessList(nodeName);
-                            break;
-                        default:
-                            // Varsayılan durumda herhangi bir işlem yapmayabilir
-                            break;
-                    }
+        let countdownTimer: number | null = null;
+        
+        // refreshInterval değiştiğinde countdown'ı sıfırla
+        setCountdown(refreshInterval);
+        
+        if (refreshInterval > 0) {
+            countdownTimer = window.setInterval(() => {
+                setCountdown((prevCount) => {
+                    // countdown 1'e ulaştığında refresh interval'a geri dön
+                    if (prevCount <= 1) {
                     return refreshInterval;
-                } else {
-                    return prevCountdown > 0 ? prevCountdown - 1 : 0;
                 }
+                    // değilse 1 azalt
+                    return prevCount - 1;
             });
         }, 1000);
-
-        // refreshInterval veya nodeName değiştiğinde geri sayımı yeniden başlat
-        setCountdown(refreshInterval);
-
+        }
+        
+        // Clean up function
         return () => {
+            if (countdownTimer) {
+                window.clearInterval(countdownTimer);
+            }
+        };
+    }, [refreshInterval]);
+
+    // Ana veri çekme useEffect
+    useEffect(() => {
+        let intervalId: number | null = null;
+        let isMounted = true;
+        let currentRequestController: AbortController | null = null;
+
+        // Veri çekme fonksiyonu
+        const fetchData = async () => {
+            if (!nodeName || !isMounted) return;
+
+            // Önceki isteği iptal et
+            if (currentRequestController) {
+                currentRequestController.abort();
+                console.log('Aborted previous request');
+            }
+
+            // Yeni bir controller oluştur
+            currentRequestController = new AbortController();
+            const timeoutId = setTimeout(() => {
+                if (currentRequestController) {
+                    console.log('Request timed out, aborting');
+                    currentRequestController.abort();
+                }
+            }, 30000); // 30 saniye timeout
+
+            try {
+                console.log(`Fetching data for submenu: ${selectedSubMenu}`);
+                
+                // selectedSubMenu'ye göre API çağrılarını yap
+                if (selectedSubMenu === 'pgbouncer') {
+                    await fetchPgBouncerStats(nodeName);
+                } else if (selectedSubMenu === 'connections') {
+                    await fetchQueryResults(nodeName);
+                } else if (selectedSubMenu === 'connections-by-app') {
+                    await fetchQueryNonIdleConnsResults(nodeName);
+                } else if (selectedSubMenu === 'top-cpu') {
+                    await fetchQueryTopCpuResults(nodeName);
+                } else if (selectedSubMenu === 'cache-hit') {
+                    await fetchQueryCacheHitRatioResults(nodeName);
+                } else if (selectedSubMenu === 'long-running') {
+                    await fetchQueryLongRunningResults(nodeName);
+                } else if (selectedSubMenu === 'blocking') {
+                    await fetchQueryLocksResults(nodeName);
+                } else if (selectedSubMenu === 'index-usage' && selectedDatabase) {
+                    await fetchQueryUnusedIndexes(nodeName, selectedDatabase);
+                } else if (selectedSubMenu === 'index-bloat' && selectedDatabase) {
+                    await fetchQueryIndexBloat(nodeName, selectedDatabase);
+                } else if (selectedSubMenu === 'system' && activeTab === '4' && refreshInterval > 0) {
+                    console.log('Fetching metrics data due to refresh interval');
+                    await fetchSystemMetrics(nodeName);
+                } else if (selectedSubMenu === 'logs') {
+                    await fetchPostgresLogs(nodeName);
+                } else if (selectedSubMenu === 'db-stats' && selectedDatabase) {
+                    await fetchQueryDbStats(nodeName, selectedDatabase);
+                } else if (selectedSubMenu === 'user-access-list') {
+                    await fetchQueryUserAccessList(nodeName);
+                }
+                
+                // Database listesi gerektiren sayfalar için
+                if (selectedSubMenu === 'index-usage' || selectedSubMenu === 'index-bloat' || 
+                    selectedSubMenu === 'db-stats' || activeTab === '3' || activeTab === '6') {
+                    await fetchDatabases(nodeName);
+                }
+                
+                console.log('Fetch completed successfully');
+            } catch (error: unknown) {
+                if (error instanceof Error && error.name === 'AbortError') {
+                    console.log('Fetch aborted due to timeout or manual abort');
+                    return;
+                }
+                console.error('Error in fetchData:', error);
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        };
+
+        // İlk yükleme için tek seferlik çağrı
+        fetchData();
+
+        // Refresh interval ayarla
+        if (refreshInterval > 0) {
+            intervalId = window.setInterval(fetchData, refreshInterval * 1000);
+        }
+
+        // Cleanup
+        return () => {
+            console.log('Cleaning up data fetch useEffect');
+            isMounted = false;
             if (intervalId !== null) {
                 clearInterval(intervalId);
             }
+            if (currentRequestController) {
+                currentRequestController.abort();
+            }
         };
-    }, [refreshInterval, nodeName, activeTab, selectedDatabase, fetchQueryTopCpuResults]);
+    }, [refreshInterval, nodeName, activeTab, selectedSubMenu, selectedDatabase]);
 
+    // Ana useEffect'e currentStep ayarlamayı ekleyelim
     useEffect(() => {
         if (nodeName) {
-            setCurrentStep(activeTab === '3' ? 3 : 2);
-            if (activeTab === '1') {
-                fetchPgBouncerStats(nodeName);
-                fetchQueryResults(nodeName);
-                fetchQueryNonIdleConnsResults(nodeName);
-            } else if (activeTab === '2') {
-                fetchQueryTopCpuResults(nodeName);
-                fetchQueryCacheHitRatioResults(nodeName)
-                fetchQueryLongRunningResults(nodeName)
-                fetchQueryLocksResults(nodeName)
-            } else if (activeTab === '3') {
-                fetchQueryUnusedIndexes(nodeName, selectedDatabase);
-                fetchQueryIndexBloat(nodeName, selectedDatabase)
-                fetchDatabases(nodeName);
-            } else if (activeTab === '4') {
-                fetchCPUUsage(nodeName)
-                fetchMemoryUsage(nodeName)
-                fetchLoadAverage(nodeName)
-                fetchSystemInfo(nodeName);
-            } else if (activeTab === '5') {
-                fetchPostgresLogs(nodeName)
-            } else if (activeTab === '6') {
-                fetchQueryDbStats(nodeName, selectedDatabase);
-                fetchDatabases(nodeName);
+            // activeTab değerine göre currentStep'i ayarlama
+            if (activeTab === '3' || activeTab === '6') {
                 setCurrentStep(3);
-            } else if (activeTab === '7') {
-                fetchQueryUserAccessList(nodeName);
-
+            } else if (activeTab === '4' || activeTab === '5' || activeTab === '7') {
+                setCurrentStep(2);
+            } else {
+                setCurrentStep(2);
             }
-
         }
-    }, [nodeName, activeTab, selectedDatabase, fetchQueryTopCpuResults]);
+    }, [nodeName, activeTab]);
 
     // API'den veri çekme ve cluster isimlerini ayarlama.
     useEffect(() => {
@@ -2481,8 +2530,8 @@ const PostgrePA: React.FC = () => {
             try {
                 setLoadingClusterName(true)
                 const response = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/status/postgres`, {
-                headers: {
-                    'Content-Type': 'application/json',
+                    headers: {
+                        'Content-Type': 'application/json',
                         'Accept': 'application/json',
                     },
                     withCredentials: true
@@ -2532,16 +2581,14 @@ const PostgrePA: React.FC = () => {
         }
     }, [clusterName, data]);
 
-    const roundedCpuUsage = parseFloat(queryResultsCpuUsage.cpu_usage.toFixed(2));
-    const roundedMemoryUsage = parseFloat(queryResultsMemoryUsage.memory_usage.toFixed(2));
-
     const formatMemory = (memoryInGB: number): string => {
+        if (!memoryInGB || memoryInGB === 0) return '0 MB';
         return `${memoryInGB.toFixed(2)} GB`;
     };
 
     const getColor = (value: number): string => {
-        if (value < loadAverage.cpuCount) return 'green';
-        if (value < loadAverage.cpuCount * 2) return 'orange';
+        if (value < 1) return 'green';
+        if (value < 2) return 'orange';
         return 'red';
     };
 
@@ -2643,36 +2690,58 @@ const PostgrePA: React.FC = () => {
 
 
 
-    
+
     // Alt menü seçildiğinde
     const handleSubMenuClick = (key: string) => {
-        // Alt menüsü olmayan öğeler için selectedSubMenu'yu temizle
-        if (key === 'user-access-list') {
-            setSelectedSubMenu('');
-            setActiveTab('7');
-            fetchQueryUserAccessList(nodeName);
+        console.log(`Submenu selected: ${key}`);
+        
+        // Eğer önceki seçilen alt menü ile aynıysa, tekrar API çağrısı yapmayı önlemek için return
+        if (key === selectedSubMenu) {
+            console.log('Same submenu already selected, skipping');
             return;
         }
-
-        // Alt menüsü olan öğeler için normal işlem
-        setSelectedSubMenu(key);
         
-        // Alt menü öğesine göre activeTab değerini güncelle
-        if (key === 'pgbouncer' || key === 'connections' || key === 'connections-by-app') {
-            setActiveTab('1');
-        } else if (key === 'top-cpu' || key === 'blocking' || key === 'long-running' || key === 'cache-hit') {
-            setActiveTab('2');
-        } else if (key === 'index-usage' || key === 'index-bloat') {
-            setActiveTab('3');
-        } else if (key === 'system') {
-            setActiveTab('4');
-        } else if (key === 'logs') {
-            setActiveTab('5');
-        } else if (key === 'db-stats') {
-            setActiveTab('6');
+        // Alt menü tipine göre işlem yap ve activeTab değerini güncelle
+        switch(key) {
+            case 'user-access-list':
+                setSelectedSubMenu('user-access-list');
+                setActiveTab('7');
+                break;
+            case 'system':
+                setSelectedSubMenu('system');
+                setActiveTab('4');
+                break;
+            case 'logs':
+                setSelectedSubMenu('logs');
+                setActiveTab('5');
+                break;
+            case 'db-stats':
+                setSelectedSubMenu('db-stats');
+                setActiveTab('6');
+                break;
+            case 'pgbouncer':
+            case 'connections':
+            case 'connections-by-app':
+                setSelectedSubMenu(key);
+                setActiveTab('1');
+                break;
+            case 'top-cpu':
+            case 'blocking':
+            case 'long-running':
+            case 'cache-hit':
+                setSelectedSubMenu(key);
+                setActiveTab('2');
+                break;
+            case 'index-usage':
+            case 'index-bloat':
+                setSelectedSubMenu(key);
+                setActiveTab('3');
+                break;
+            default:
+                setSelectedSubMenu(key);
         }
     };
-    
+
     // Render fonksiyonları
     const renderConnectionsContent = () => {
         switch (selectedSubMenu) {
@@ -2749,13 +2818,19 @@ const PostgrePA: React.FC = () => {
                 );
         }
     };
-    
+
     const renderQueriesContent = () => {
         switch (selectedSubMenu) {
             case 'top-cpu':
                 return (
                             <div style={{ marginTop: 10 }}>
-                                <Table pagination={false} loading={isLoadingTopCpuQueryResults} dataSource={queryResultsTopCpu} columns={columnsTopCpu} scroll={{ x: 'max-content' }}
+                        <Table 
+                            pagination={false} 
+                            loading={isLoadingTopCpuQueryResults} 
+                            dataSource={queryResultsTopCpu.map((result, index) => ({ ...result, key: `cpu-${index}` }))} 
+                            columns={columnsTopCpu} 
+                            scroll={{ x: 'max-content' }}
+                            rowKey="key"
                                     footer={() => (
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                             <button onClick={() => fetchQueryTopCpuResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
@@ -2767,13 +2842,20 @@ const PostgrePA: React.FC = () => {
                                     title={() => (
                                         <div style={{ display: 'flex', alignItems: 'left' }}>
                                         </div>
-                                    )} />
+                            )} 
+                        />
                             </div>
                 );
             case 'blocking':
                 return (
                             <div style={{ marginTop: 10 }}>
-                                <Table pagination={false} loading={isLoadingLocsResults} dataSource={queryResultsLocks} columns={columnsLocks} scroll={{ x: 'max-content' }}
+                        <Table 
+                            pagination={false} 
+                            loading={isLoadingLocsResults} 
+                            dataSource={queryResultsLocks.map((result, index) => ({ ...result, key: `lock-${index}` }))} 
+                            columns={columnsLocks} 
+                            scroll={{ x: 'max-content' }}
+                            rowKey="key"
                                     footer={() => (
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                             <button onClick={() => fetchQueryLocksResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
@@ -2785,13 +2867,20 @@ const PostgrePA: React.FC = () => {
                                     title={() => (
                                         <div style={{ display: 'flex', alignItems: 'left' }}>
                                         </div>
-                                    )} />
+                            )} 
+                        />
                             </div>
                 );
             case 'long-running':
                 return (
                             <div style={{ marginTop: 10 }}>
-                                <Table pagination={false} loading={isLoadingLongRunningQueryResults} dataSource={queryResultsLongRunning} columns={columnsLongRunning} scroll={{ x: 'max-content' }}
+                        <Table 
+                            pagination={false} 
+                            loading={isLoadingLongRunningQueryResults} 
+                            dataSource={queryResultsLongRunning.map((result, index) => ({ ...result, key: `long-${index}` }))} 
+                            columns={columnsLongRunning} 
+                            scroll={{ x: 'max-content' }}
+                            rowKey="key"
                                     footer={() => (
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                             <button onClick={() => fetchQueryLongRunningResults(nodeName)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
@@ -2803,13 +2892,21 @@ const PostgrePA: React.FC = () => {
                                     title={() => (
                                         <div style={{ display: 'flex', alignItems: 'left' }}>
                                         </div>
-                                    )} />
+                            )} 
+                        />
                             </div>
                 );
             case 'cache-hit':
                 return (
                     <div style={{ marginTop: 10 }}>
-                                <Table pagination={false} loading={isLoadingCacheHitQueryResults} dataSource={queryResultsCacheHitRatio} columns={columnsCacheHitRatio} scroll={{ x: 'max-content' }} rowClassName={(record) => {
+                        <Table 
+                            pagination={false} 
+                            loading={isLoadingCacheHitQueryResults} 
+                            dataSource={queryResultsCacheHitRatio.map((result, index) => ({ ...result, key: `cache-${index}` }))} 
+                            columns={columnsCacheHitRatio} 
+                            scroll={{ x: 'max-content' }} 
+                            rowKey="key"
+                            rowClassName={(record) => {
                                     return record.hit_cache_ratio < 97 ? 'low-cache-hit-ratio' : '';
                                 }}
                                     footer={() => (
@@ -2823,7 +2920,8 @@ const PostgrePA: React.FC = () => {
                                     title={() => (
                                         <div style={{ display: 'flex', alignItems: 'left' }}>
                                         </div>
-                                    )} />
+                            )} 
+                        />
                             </div>
                 );
             default:
@@ -2835,13 +2933,18 @@ const PostgrePA: React.FC = () => {
                 );
         }
     };
-    
+
     const renderIndexesContent = () => {
         switch (selectedSubMenu) {
             case 'index-usage':
                 return (
                             <div style={{ marginTop: 10 }}>
-                                <Table loading={isLoadingUnusedIndexesResults} dataSource={queryResultsUnusedIndexes} columns={columnsUnusedIndexes} scroll={{ x: 'max-content' }}
+                        <Table 
+                            loading={isLoadingUnusedIndexesResults} 
+                            dataSource={queryResultsUnusedIndexes.map((result, index) => ({ ...result, key: `unused-${index}` }))} 
+                            columns={columnsUnusedIndexes} 
+                            scroll={{ x: 'max-content' }}
+                            rowKey="key"
                                     footer={() => (
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                             <button onClick={() => fetchQueryUnusedIndexes(nodeName, selectedDatabase)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
@@ -2853,13 +2956,19 @@ const PostgrePA: React.FC = () => {
                                     title={() => (
                                         <div style={{ display: 'flex', alignItems: 'left' }}>
                                         </div>
-                                    )} />
+                            )} 
+                        />
                             </div>
                 );
             case 'index-bloat':
                 return (
                             <div style={{ marginTop: 10 }}>
-                                <Table loading={isLoadingIndexBloatResults} dataSource={queryResultsIndexBloat} columns={columnsIndexBloat} scroll={{ x: 'max-content' }}
+                        <Table 
+                            loading={isLoadingIndexBloatResults} 
+                            dataSource={queryResultsIndexBloat.map((result, index) => ({ ...result, key: `bloat-${index}` }))} 
+                            columns={columnsIndexBloat} 
+                            scroll={{ x: 'max-content' }}
+                            rowKey="key"
                                     footer={() => (
                                         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                                             <button onClick={() => fetchQueryIndexBloat(nodeName, selectedDatabase)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}>
@@ -2871,7 +2980,8 @@ const PostgrePA: React.FC = () => {
                                     title={() => (
                                         <div style={{ display: 'flex', alignItems: 'left' }}>
                                         </div>
-                                    )} />
+                            )} 
+                        />
                             </div>
                 );
             default:
@@ -2883,7 +2993,45 @@ const PostgrePA: React.FC = () => {
                 );
         }
     };
-    
+
+    // Metrics verilerini otomatik olarak çekecek useEffect
+    useEffect(() => {
+        // Bu flag component unmount olduğunda API çağrısını önlemek için
+        let isMounted = true;
+        
+        // Node değiştiğinde ve bir node seçili olduğunda ve 
+        // system tab aktif olduğunda metrics verilerini çek
+        if (nodeName && activeTab === '4') {
+            console.log('METRICS: Tab or node changed, auto-fetching metrics data');
+            
+            // Loading state'i başlangıçta aktif et
+            setIsLoadingMetrics(true);
+            
+            // Doğrudan setTimeout içinde çağıralım ki render cycle tamamlansın
+            const delayedFetch = setTimeout(async () => {
+                if (isMounted && activeTab === '4') {
+                    console.log('METRICS: Executing delayed fetch');
+                    
+                    // API çağrısı başarısız olsa bile bileşen güncellenmeli ve hata durumu kontrol edilmeli
+                    try {
+                        await fetchSystemMetrics(nodeName);
+                    } catch (error) {
+                        console.error('METRICS: Error in useEffect fetch:', error);
+                        // Loading state'i her durumda kapat
+                        setIsLoadingMetrics(false);
+                    }
+                }
+            }, 300);
+            
+            // Cleanup function - component unmount olduğunda veya dependencies değiştiğinde
+            return () => {
+                console.log('METRICS: Cleaning up useEffect');
+                isMounted = false;
+                clearTimeout(delayedFetch);
+            };
+        }
+    }, [nodeName, activeTab]); // Sadece node veya tab değiştiğinde tetikle
+
     return (
         <div style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '10px' }}>
@@ -2904,7 +3052,6 @@ const PostgrePA: React.FC = () => {
                     )}
                 </div>
             </div>
-
             <Card style={{ marginBottom: '20px' }}>
                 <Steps current={currentStep}>
                     <Step title="Select Cluster" />
@@ -2917,14 +3064,21 @@ const PostgrePA: React.FC = () => {
                 <Row justify="center" align="middle" style={{ marginTop: 20 }}>
                     <Col span={8} style={{ paddingRight: '10px' }}>
                         <Select
+                            showSearch
                             value={clusterName}
                             onChange={setClusterName}
                             style={{ width: '100%' }}
+                            filterOption={(input, option) =>
+                                option?.children
+                                    ? option.children.toString().toLowerCase().includes(input.toLowerCase())
+                                    : false
+                            }
                             loading={loadingClusterName}
-                            showSearch
                         >
-                            {clusterNames.map(name => (
-                                <Option key={name} value={name}>{name}</Option>
+                            {clusterNames.map((name, index) => (
+                                <Option key={`cluster-${name}-${index}`} value={name}>
+                                    {name}
+                                </Option>
                             ))}
                         </Select>
                     </Col>
@@ -2951,8 +3105,10 @@ const PostgrePA: React.FC = () => {
                                 loading={loading}
                                 showSearch
                             >
-                                {databaseNames.map(dbName => (
-                                    <Option key={dbName} value={dbName}>{dbName}</Option>
+                                {databaseNames.map((db, index) => (
+                                    <Option key={`db-${db}-${index}`} value={db}>
+                                        {db}
+                                    </Option>
                                 ))}
                             </Select>
                         </Col>
@@ -2962,8 +3118,8 @@ const PostgrePA: React.FC = () => {
                         <Col span={8} style={{ paddingRight: '10px' }}>
                             <Select
                                 showSearch
-                                onChange={handleLogFileChange}
                                 placeholder="Select a log file"
+                                onChange={handleLogFileChange}
                                 style={{ width: '100%' }}
                                 filterOption={(input, option) =>
                                     option?.children
@@ -2972,14 +3128,9 @@ const PostgrePA: React.FC = () => {
                                 }
                                 loading={loadingPgLogs}
                             >
-                                {pgLogFiles.map((logFile, index) => {
-                                    const displayText = logFile.timeRange ? `${logFile.name} - ${logFile.timeRange}` : logFile.name;
-                                    return (
-                                        <Option key={index} value={logFile.name}>
-                                            {displayText}
-                                        </Option>
-                                    );
-                                })}
+                                {pgLogFiles.map((log, index) => (
+                                    <Option key={`log-${log.name}-${index}`} value={log.name}>{log.name}</Option>
+                                ))}
                             </Select>
                         </Col>
                     )}
@@ -2992,8 +3143,10 @@ const PostgrePA: React.FC = () => {
                                 loading={loading}
                                 showSearch
                             >
-                                {databaseNames.map(dbName => (
-                                    <Option key={dbName} value={dbName}>{dbName}</Option>
+                                {databaseNames.map((db, index) => (
+                                    <Option key={`db-${db}-${index}`} value={db}>
+                                        {db}
+                                    </Option>
                                 ))}
                             </Select>
                         </Col>
@@ -3003,15 +3156,15 @@ const PostgrePA: React.FC = () => {
             </Card>
 
             <Layout style={{ background: '#fff', padding: '0', minHeight: '500px' }}>
-                <Sider 
-                    width={250} 
-                    style={{ 
-                        background: '#fff', 
+                <Sider
+                    width={250}
+                    style={{
+                        background: '#fff',
                         borderRight: '1px solid #f0f0f0',
                         boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
                     }}
-                    collapsible 
-                    collapsed={collapsed} 
+                    collapsible
+                    collapsed={collapsed}
                     onCollapse={setCollapsed}
                 >
                     <Menu
@@ -3054,7 +3207,6 @@ const PostgrePA: React.FC = () => {
                                 Index Bloat Ratio
                             </Menu.Item>
                         </Menu.SubMenu>
-
                         <Menu.Item key="system" icon={<SettingOutlined />} onClick={() => handleSubMenuClick('system')}>
                             System
                         </Menu.Item>
@@ -3075,51 +3227,137 @@ const PostgrePA: React.FC = () => {
                         {activeTab === '2' && renderQueriesContent()}
                         {activeTab === '3' && renderIndexesContent()}
                         {activeTab === '4' && (
-                            <Row gutter={10}>
-                                <Col span={8}>
-                                    <Card title="CPU Usage" style={{ marginTop: 10 }}>
-                                        <Progress type="dashboard" percent={roundedCpuUsage} strokeColor={twoColors} format={percent =>
-                                            <span style={{ color: percent === 100 ? 'red' : 'inherit' }}>
-                                                {percent}%
-                                            </span>}
-                                        />
-                                    </Card>
-                                </Col>
-                                <Col span={8}>
-                                    <Card title="Memory Usage" style={{ marginTop: 10 }}>
-                                        <Progress type="dashboard" percent={roundedMemoryUsage} strokeColor={twoColors} />
-                                    </Card>
-                                </Col>
-                                <Col span={8}>
-                                    <Card title="Load Average" style={{ marginTop: 10 }}>
-                                        <p style={{ color: getColor(loadAverage.load1) }}>Last 1 minute: {loadAverage.load1}</p>
-                                        <p style={{ color: getColor(loadAverage.load5) }}>Last 5 minutes: {loadAverage.load5}</p>
-                                        <p style={{ color: getColor(loadAverage.load15) }}>Last 15 minutes: {loadAverage.load15}</p>
-                                    </Card>
-                                </Col>
-                                <Col span={24}>
-                                    <Card title="System Information" style={{ marginTop: 10 }}>
-                                        <Row gutter={5}>
-                                            {systemInfo && (
-                                                <>
-                                                    <Col span={8}><p><strong>CPU Type:</strong> {systemInfo.cpu_type}</p></Col>
-                                                    <Col span={8}><p><strong>CPU Cores:</strong> {systemInfo.cpu_cores}</p></Col>
-                                                    <Col span={8}><p><strong>Memory:</strong> {formatMemory(systemInfo.ram_total)}</p></Col>
-                                                    <Col span={8}><p><strong>OS Distribution:</strong> {systemInfo.os_distribution}</p></Col>
-                                                    <Col span={8}><p><strong>OS Version:</strong> {systemInfo.os_version}</p></Col>
-                                                    <Col span={8}><p><strong>Uptime:</strong> {formatUptime(systemInfo.uptime)}</p></Col>
-                                                </>
-                                            )}
-                                        </Row>
-                                    </Card>
-                                </Col>
-                            </Row>
+                            <div id="metrics-container" key={`metrics-${Date.now()}`}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                    <h2 style={{ color: isLoadingMetrics ? '#1890ff' : 'inherit' }}>
+                                        System Metrics {isLoadingMetrics ? '(Loading...)' : ''}
+                                    </h2>
+                                    <div>
+                                        {isLoadingMetrics ? (
+                                            <Spin style={{ marginRight: '10px' }} />
+                                        ) : (
+                                            <Tag color={systemMetrics ? 'success' : 'warning'} style={{ marginRight: '10px' }}>
+                                                {systemMetrics ? 'Data Loaded' : 'No Data'}
+                                            </Tag>
+                                        )}
+                                        <Button 
+                                            type="primary"
+                                            onClick={() => {
+                                                console.log('METRICS: Manual refresh button clicked');
+                                                // Reset state before fetching - ensures visual changes
+                                                setSystemMetrics(null);
+                                                if (nodeName) fetchSystemMetrics(nodeName);
+                                            }} 
+                                            icon={<ReloadOutlined />}
+                                            loading={isLoadingMetrics}
+                                            disabled={!nodeName || isLoadingMetrics}
+                                        >
+                                            Refresh Metrics
+                                        </Button>
+                                    </div>
+                                </div>
+                                
+                                {!nodeName && (
+                                    <Alert 
+                                        message="Please select a node to view metrics" 
+                                        type="info" 
+                                        showIcon 
+                                        style={{ marginBottom: '16px' }}
+                                    />
+                                )}
+                                
+                                {nodeName && isLoadingMetrics && (
+                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '300px', border: '1px dashed #d9d9d9', borderRadius: '8px', background: '#fafafa' }}>
+                                        <div style={{ textAlign: 'center' }}>
+                                            <Spin size="large" />
+                                            <div style={{ marginTop: '15px', color: '#1890ff', fontWeight: 'bold' }}>
+                                                Loading System Metrics...
+                                            </div>
+                                            <div style={{ maxWidth: '80%', margin: '10px auto', color: '#666' }}>
+                                                This may take up to 60 seconds. If data doesn't appear, please use the refresh button.
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                {nodeName && !isLoadingMetrics && !systemMetrics && (
+                                    <Alert 
+                                        message="No metrics data available" 
+                                        description="The server didn't return any metrics data. Please try refreshing or check server logs."
+                                        type="warning" 
+                                        showIcon 
+                                        style={{ marginBottom: '16px' }}
+                                    />
+                                )}
+                                
+                                {nodeName && !isLoadingMetrics && systemMetrics && (
+                                    <Row gutter={16}>
+                                        <Col span={8}>
+                                            <Card title="CPU" hoverable>
+                                                <Progress 
+                                                    type="dashboard" 
+                                                    percent={parseFloat((systemMetrics.cpu_usage || 0).toFixed(2))}
+                                                    strokeColor={systemMetrics.cpu_usage > 70 ? '#ff4d4f' : '#52c41a'}
+                                                />
+                                                <div style={{ marginTop: '10px', textAlign: 'center' }}>
+                                                    <p><strong>Cores:</strong> {systemMetrics.cpu_cores}</p>
+                                                </div>
+                                            </Card>
+                                        </Col>
+                                        <Col span={8}>
+                                            <Card title="Memory" hoverable>
+                                                <Progress 
+                                                    type="dashboard" 
+                                                    percent={parseFloat((systemMetrics.memory_usage || 0).toFixed(2))}
+                                                    strokeColor={systemMetrics.memory_usage > 70 ? '#ff4d4f' : '#52c41a'}
+                                                />
+                                                <div style={{ marginTop: '10px', textAlign: 'center' }}>
+                                                    <p><strong>Total:</strong> {formatBytes(systemMetrics.total_memory || 0)}</p>
+                                                    <p><strong>Free:</strong> {formatBytes(systemMetrics.free_memory || 0)}</p>
+                                                </div>
+                                            </Card>
+                                        </Col>
+                                        <Col span={8}>
+                                            <Card title="Load Average" hoverable>
+                                                <ul style={{ listStyleType: 'none', padding: 0 }}>
+                                                    <li style={{ margin: '10px 0', color: getColor(systemMetrics.load_average_1m || 0) }}>
+                                                        <strong>1 min:</strong> {systemMetrics.load_average_1m || 0}
+                                                    </li>
+                                                    <li style={{ margin: '10px 0', color: getColor(systemMetrics.load_average_5m || 0) }}>
+                                                        <strong>5 min:</strong> {systemMetrics.load_average_5m || 0}
+                                                    </li>
+                                                    <li style={{ margin: '10px 0', color: getColor(systemMetrics.load_average_15m || 0) }}>
+                                                        <strong>15 min:</strong> {systemMetrics.load_average_15m || 0}
+                                                    </li>
+                                                </ul>
+                                            </Card>
+                                        </Col>
+                                        <Col span={24} style={{ marginTop: '16px' }}>
+                                            <Card title="System Information" hoverable>
+                                                <Row gutter={16}>
+                                                    <Col span={6}>
+                                                        <p><strong>OS:</strong> {systemMetrics.os_version || 'Unknown'}</p>
+                                                        <p><strong>Kernel:</strong> {systemMetrics.kernel_version || 'Unknown'}</p>
+                                                    </Col>
+                                                    <Col span={6}>
+                                                        <p><strong>Disk Total:</strong> {formatBytes(systemMetrics.total_disk || 0)}</p>
+                                                        <p><strong>Disk Free:</strong> {formatBytes(systemMetrics.free_disk || 0)}</p>
+                                                    </Col>
+                                                    <Col span={12}>
+                                                        <p><strong>Uptime:</strong> {formatUptime(systemMetrics.uptime || 0)}</p>
+                                                    </Col>
+                                                </Row>
+                                            </Card>
+                                        </Col>
+                                    </Row>
+                                )}
+                            </div>
                         )}
-                        {activeTab === '5' && (
+                {activeTab === '5' && (
                             <div>
                                 <Spin spinning={loadingPgLogs}>
-                                    {pgLogFiles.map(log => (
-                                        <Option key={log.name} value={log.name}>{log.name}</Option>
+                            {pgLogFiles.map((log, index) => (
+                                <Option key={`log-${log.name}-${index}`} value={log.name}>{log.name}</Option>
                                     ))}
                                 </Spin>
 
@@ -3191,8 +3429,8 @@ const PostgrePA: React.FC = () => {
                                     </>
                                 )}
                             </div>
-                        )}
-                        {activeTab === '6' && (
+                )}
+                {activeTab === '6' && (
                             <div style={{ marginTop: 10 }}>
                                 <div style={{ marginTop: 20 }}>
                                     {queryResultsDbStats ? (
@@ -3212,8 +3450,8 @@ const PostgrePA: React.FC = () => {
                                     )}
                                 </div>
                             </div>
-                        )}
-                        {activeTab === '7' && (
+                )}
+                {activeTab === '7' && (
                             <div style={{ marginTop: 10 }}>
                                 <Table loading={isLoadingUserAccessListResults} dataSource={queryResultsUserAccessList} columns={UserAccessListColumns} scroll={{ x: 'max-content' }}
                                     footer={() => (
@@ -3229,12 +3467,14 @@ const PostgrePA: React.FC = () => {
                                         </div>
                                     )} />
                             </div>
-                        )}
+                )}
                 </Card>
-                </Content>
-            </Layout>
-            </div>
+        </Content>
+            </Layout >
+        </div >
     );
 };
 
 export default PostgrePA;
+
+

@@ -42,19 +42,25 @@ const ErrorModal: React.FC = () => {
     };
 
     useEffect(() => {
-        fetchErrorLogs();
+        // İlk yükleme sırasında veri çekmeyi devre dışı bırakıyoruz
+        // fetchErrorLogs();
 
-        const interval = setInterval(() => {
-            fetchErrorLogs();
-        }, 10000);
+        // Interval'i de devre dışı bırakıyoruz
+        // const interval = setInterval(() => {
+        //     fetchErrorLogs();
+        // }, 10000);
 
-        return () => clearInterval(interval);
+        // Temizleme fonksiyonunu koruyoruz
+        // return () => clearInterval(interval);
+        
+        // Artık aktif bir interval olmadığı için temizleme işlemi de gerekmiyor
+        return () => {};
     }, []);
 
     return (
         <>
             <div onClick={fetchAndOpenLogs} style={{ display: 'inline-block', cursor: 'pointer' }}>
-                <Badge dot={hasRecentError}>
+                <Badge dot={false}>
                 <Tooltip title="Agent Error Logs"> <NotificationOutlined style={{ fontSize: 16, marginLeft: '10px', color: 'white'}} /></Tooltip>
                 </Badge>
             </div>
