@@ -207,7 +207,7 @@ const Mongo: React.FC = () => {
 				credentials: 'include'
 			});
 			
-			if (!response.ok) {
+				if (!response.ok) {
 				throw new Error(`Error fetching MongoDB status: ${response.status} - ${response.statusText}`);
 			}
 			
@@ -327,7 +327,7 @@ const Mongo: React.FC = () => {
 				
 				console.log('Agent statuses updated:', newAgentStatuses);
 				setAgentStatuses(newAgentStatuses);
-			} else {
+		} else {
 				console.warn('Unexpected agent status response format:', agentResponse.data);
 			}
 		} catch (error) {
@@ -404,7 +404,7 @@ const Mongo: React.FC = () => {
 			setOperationResult({ success: false, message: 'An error occurred!' });
 		}
 	}
-	
+
 	const handleSecondModalClose = () => {
 		setIsSecondModalVisible(false);
 	}
@@ -510,18 +510,18 @@ const Mongo: React.FC = () => {
 							</div>
 						) : (
 							<>
-								<div className="stats-container">
-									<div key={"sad"} className="panels-wrapper">
+							<div className="stats-container">
+								<div key={"sad"} className="panels-wrapper">
 										{data
 											.sort((a: MyData, b: MyData) => {
-												const aKey = Object.keys(a)[0];
-												const bKey = Object.keys(b)[0];
-												return aKey.localeCompare(bKey);
-											})
+											const aKey = Object.keys(a)[0];
+											const bKey = Object.keys(b)[0];
+											return aKey.localeCompare(bKey);
+										})
 											.map((da: MyData) => {
-												return Object.keys(da).map((replicasetname, index) => {
-													const replicaNodes = da[replicasetname];
-													const detailedNodes = getReplicaDetail(replicaNodes);
+											return Object.keys(da).map((replicasetname, index) => {
+												const replicaNodes = da[replicasetname];
+												const detailedNodes = getReplicaDetail(replicaNodes);
 
 													// Check agent status for each node in the replica set
 													const isNodeUpdated = detailedNodes.some((nodeDetail) => {
@@ -533,70 +533,70 @@ const Mongo: React.FC = () => {
 															agentStatuses[`${baseNodeName}.hepsiburada.dmz`] || 
 															agentStatuses[`${baseNodeName}.hepsi.io`] || 
 															agentStatuses[`${baseNodeName}.dpay.int`];
-													});
-
-													const styleClasses = getPanelStyleClasses(detailedNodes);
-
-													return (
-														<Tooltip
-															title={styleClasses.tooltip} // Tooltip mesajını burada kullanıyoruz
-															placement="top"
-															color="red"
-															key={`tooltip_${replicasetname}_${index}`}
-														>
-															<div
-																key={`div1_${replicasetname}_${index}`}
-																className={`${styleClasses.containerClass} ${
-																	selectedCard === replicasetname ? 'card-container bn6' : ''
-																}`}
-																style={{ margin: 4, cursor: 'pointer' }}
-															>
-																<Badge
-																	key={`badge${index}`}
-																	status={isNodeUpdated ? 'processing' : 'error'}
-																	color={isNodeUpdated ? 'green' : 'red'}
-																	dot
-																	offset={[-2, 2]}
-																>
-																	<CustomCardMongo
-																		iconColor={styleClasses.iconColor}
-																		clusterName={replicasetname}
-																		nodes={detailedNodes}
-																		key={`card1${index}`}
-																		onClick={() => handle(replicasetname)}
-																	>
-																		<div
-																			key={`div2${index}`}
-																			style={{ display: 'flex', alignItems: 'center' }}
-																		>
-																			<IconMongo
-																				key={`icon1${index}`}
-																				size="25"
-																				color={styleClasses.iconColor}
-																			/>
-																			<span
-																				key={`span1${index}`}
-																				style={{
-																					marginLeft: 8,
-																					whiteSpace: 'nowrap',
-																					overflow: 'hidden',
-																					fontSize: '12px',
-																					textOverflow: 'ellipsis',
-																					maxWidth: 'calc(100% - 25px - 8px)',
-																				}}
-																			>
-																				{replicasetname}
-																			</span>
-																		</div>
-																	</CustomCardMongo>
-																</Badge>
-															</div>
-														</Tooltip>
-													);
 												});
-											})}
-									</div>
+
+												const styleClasses = getPanelStyleClasses(detailedNodes);
+
+												return (
+													<Tooltip
+														title={styleClasses.tooltip} // Tooltip mesajını burada kullanıyoruz
+														placement="top"
+														color="red"
+														key={`tooltip_${replicasetname}_${index}`}
+													>
+														<div
+															key={`div1_${replicasetname}_${index}`}
+															className={`${styleClasses.containerClass} ${
+																selectedCard === replicasetname ? 'card-container bn6' : ''
+															}`}
+															style={{ margin: 4, cursor: 'pointer' }}
+														>
+															<Badge
+																key={`badge${index}`}
+																status={isNodeUpdated ? 'processing' : 'error'}
+																color={isNodeUpdated ? 'green' : 'red'}
+																dot
+																offset={[-2, 2]}
+															>
+																<CustomCardMongo
+																	iconColor={styleClasses.iconColor}
+																	clusterName={replicasetname}
+																	nodes={detailedNodes}
+																	key={`card1${index}`}
+																	onClick={() => handle(replicasetname)}
+																>
+																	<div
+																		key={`div2${index}`}
+																		style={{ display: 'flex', alignItems: 'center' }}
+																	>
+																		<IconMongo
+																			key={`icon1${index}`}
+																			size="25"
+																			color={styleClasses.iconColor}
+																		/>
+																		<span
+																			key={`span1${index}`}
+																			style={{
+																				marginLeft: 8,
+																				whiteSpace: 'nowrap',
+																				overflow: 'hidden',
+																				fontSize: '12px',
+																				textOverflow: 'ellipsis',
+																				maxWidth: 'calc(100% - 25px - 8px)',
+																			}}
+																		>
+																			{replicasetname}
+																		</span>
+																	</div>
+																</CustomCardMongo>
+															</Badge>
+														</div>
+													</Tooltip>
+												);
+											});
+										})}
 								</div>
+							</div>
 				
 								{/* Seçili kartın topoloji görünümü */}
 								{selectedCard && activeCluster.length > 0 && (

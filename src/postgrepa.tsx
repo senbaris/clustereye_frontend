@@ -2231,7 +2231,7 @@ const PostgrePA: React.FC = () => {
                         
                         setQueryResultsDbStats(queryResult);
                         console.log('DB STATS: Successfully set DB stats results');
-                    } catch (error) {
+        } catch (error) {
                         console.error('DB STATS: Error parsing result:', error);
                         message.error('Error parsing database statistics');
                         setQueryResultsDbStats([]);
@@ -3487,7 +3487,7 @@ const PostgrePA: React.FC = () => {
                                 
                                 {nodeName && !isLoadingMetrics && systemMetrics && (
                                     <Row gutter={16}>
-                                        <Col span={8}>
+                                <Col span={8}>
                                             <Card title="CPU" hoverable>
                                                 <Progress 
                                                     type="dashboard" 
@@ -3497,9 +3497,9 @@ const PostgrePA: React.FC = () => {
                                                 <div style={{ marginTop: '10px', textAlign: 'center' }}>
                                                     <p><strong>Cores:</strong> {systemMetrics.cpu_cores}</p>
                                                 </div>
-                                            </Card>
-                                        </Col>
-                                        <Col span={8}>
+                                    </Card>
+                                </Col>
+                                <Col span={8}>
                                             <Card title="Memory" hoverable>
                                                 <Progress 
                                                     type="dashboard" 
@@ -3510,9 +3510,9 @@ const PostgrePA: React.FC = () => {
                                                     <p><strong>Total:</strong> {formatBytes(systemMetrics.total_memory || 0)}</p>
                                                     <p><strong>Free:</strong> {formatBytes(systemMetrics.free_memory || 0)}</p>
                                                 </div>
-                                            </Card>
-                                        </Col>
-                                        <Col span={8}>
+                                    </Card>
+                                </Col>
+                                <Col span={8}>
                                             <Card title="Load Average" hoverable>
                                                 <ul style={{ listStyleType: 'none', padding: 0 }}>
                                                     <li style={{ margin: '10px 0', color: getColor(systemMetrics.load_average_1m || 0) }}>
@@ -3525,8 +3525,8 @@ const PostgrePA: React.FC = () => {
                                                         <strong>15 min:</strong> {systemMetrics.load_average_15m || 0}
                                                     </li>
                                                 </ul>
-                                            </Card>
-                                        </Col>
+                                    </Card>
+                                </Col>
                                         <Col span={24} style={{ marginTop: '16px' }}>
                                             <Card title="System Information" hoverable>
                                                 <Row gutter={16}>
@@ -3541,10 +3541,10 @@ const PostgrePA: React.FC = () => {
                                                     <Col span={12}>
                                                         <p><strong>Uptime:</strong> {formatUptime(systemMetrics.uptime || 0)}</p>
                                                     </Col>
-                                                </Row>
-                                            </Card>
-                                        </Col>
-                                    </Row>
+                                        </Row>
+                                    </Card>
+                                </Col>
+                            </Row>
                                 )}
                             </div>
                         )}

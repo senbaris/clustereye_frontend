@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import './index.css';
 import Mongo from './mongo';
 import MainLayout from './layout';
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import { HashRouter as Router, Route, Routes } from 'react-router-dom';
 import Postgres from './postgresql';
 import Mssql from './mssql';
 import Cassandra from './cassandra';

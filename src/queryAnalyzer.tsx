@@ -82,7 +82,7 @@ function syntaxHighlight(json: unknown): string {
     // Eğer json bir string değilse, onu string'e çevir
     if (typeof json !== 'string') {
         try {
-            jsonString = JSON.stringify(json, undefined, 2);
+        jsonString = JSON.stringify(json, undefined, 2);
         } catch (error) {
             console.error("JSON stringification error:", error);
             return `<span class="error">Error: Could not stringify object</span>`;
@@ -400,7 +400,7 @@ const QueryAnalyzer: React.FC = () => {
                     return <span style={{ color: '#999' }}>No query data</span>;
                 }
                 return (
-                    <button onClick={() => showCommandModal(command)}>Show Query</button>
+                <button onClick={() => showCommandModal(command)}>Show Query</button>
                 );
             },
             // JSON objesini düzgün biçimlendirilmiş string olarak gösterir
@@ -410,8 +410,8 @@ const QueryAnalyzer: React.FC = () => {
     // Replica set verilerini almak için API çağrısı
     const fetchReplicaSets = async () => {
         setFetchingReplSets(true);
-        setLoading(true);
-        try {
+                setLoading(true);
+                try {
             // localStorage'dan token al
             const token = localStorage.getItem('token');
 
@@ -437,16 +437,16 @@ const QueryAnalyzer: React.FC = () => {
                     (replicaSetObject: ReplicaSetData) => Object.keys(replicaSetObject)[0]
                 );
                 setReplSets(fetchedReplSets);
-            } else {
+                        } else {
                 throw new Error("Unexpected API response format");
-            }
-        } catch (error) {
+                    }
+                } catch (error) {
             console.error('Error fetching replica sets:', error);
             message.error('Failed to fetch replica sets. Please try again.');
             setReplSets([]);
-        } finally {
+                } finally {
             setFetchingReplSets(false);
-            setLoading(false);
+                    setLoading(false);
         }
     };
 
@@ -514,24 +514,24 @@ const QueryAnalyzer: React.FC = () => {
 
             setNodes(foundNodes);
 
-            // İlk node'u otomatik olarak seç
+                    // İlk node'u otomatik olarak seç
             if (foundNodes.length > 0) {
-                setCurrentStep(1);
-            } else {
-                // Eğer node listesi boşsa, seçimi ve logları sıfırla
+                        setCurrentStep(1);
+                    } else {
+                        // Eğer node listesi boşsa, seçimi ve logları sıfırla
                 message.warning('No nodes found for the selected replica set');
                 setSelectedNode(null);
-                setLogFiles([]);
-            }
+                        setLogFiles([]);
+                    }
         } catch (error) {
             console.error('Error fetching nodes data:', error);
             message.error('Failed to fetch nodes data');
-            setNodes([]);
+                    setNodes([]);
             setSelectedNode(null);
-            setLogFiles([]);
+                    setLogFiles([]);
         } finally {
             setFetchingNodes(false);
-            setLoading(false);
+                setLoading(false);
         }
 
         // Seçilen log dosyasını ve logları sıfırla
@@ -557,7 +557,7 @@ const QueryAnalyzer: React.FC = () => {
         setSelectedNode(nodename);
         setCurrentStep(2);
         setFetchingLogFiles(true);
-        setLoading(true);
+            setLoading(true);
 
         try {
             // localStorage'dan token al
@@ -636,15 +636,15 @@ const QueryAnalyzer: React.FC = () => {
                 message.error('Invalid response format when fetching log files');
                 setLogFiles([]);
                 setLogFileStatsList([]);
-            }
-        } catch (error) {
+                }
+            } catch (error) {
             console.error('Error fetching log files:', error);
             message.error('Failed to fetch log files');
             setLogFiles([]);
             setLogFileStatsList([]);
-        } finally {
+            } finally {
             setFetchingLogFiles(false);
-            setLoading(false);
+                setLoading(false);
         }
     };
 
@@ -769,7 +769,7 @@ const QueryAnalyzer: React.FC = () => {
                         setDbFilters(filters);
                         
                         message.success(`${enhancedLogs.length} log entries loaded and analyzed`);
-                    } else {
+            } else {
                         message.info('No query logs found in the selected file');
                     }
                 } else if (response.data && response.data.status === 'error') {
@@ -945,19 +945,19 @@ const QueryAnalyzer: React.FC = () => {
         <div style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', marginBottom: '16px' }}>
                 <Steps current={currentStep} style={{ flex: 1 }}>
-                    <Step title="Select Replica Set" description={selectedReplicaSet ? ` ${selectedReplicaSet}` : ''} />
-                    <Step title="Select Node" description={selectedNode ? ` ${selectedNode}` : ''} />
-                    <Step
-                        title="Select Log File"
-                        description={
-                            selectedLogFile ? (
-                                <Tooltip title={selectedLogFile}>
-                                    {`${truncateString(selectedLogFile, 15)}`}
-                                </Tooltip>
-                            ) : ''
-                        }
-                    />
-                </Steps>
+                <Step title="Select Replica Set" description={selectedReplicaSet ? ` ${selectedReplicaSet}` : ''} />
+                <Step title="Select Node" description={selectedNode ? ` ${selectedNode}` : ''} />
+                <Step
+                    title="Select Log File"
+                    description={
+                        selectedLogFile ? (
+                            <Tooltip title={selectedLogFile}>
+                                {`${truncateString(selectedLogFile, 15)}`}
+                            </Tooltip>
+                        ) : ''
+                    }
+                />
+            </Steps>
                 <div style={{ marginLeft: '16px', display: 'flex', alignItems: 'center' }}>
                     <Tooltip title="Refresh Data">
                         <button
@@ -1057,8 +1057,8 @@ const QueryAnalyzer: React.FC = () => {
                             </span>
                         )}
                     </div>
-                    <Select
-                        showSearch
+                <Select
+                    showSearch
                         placeholder={fetchingLogFiles ? "Loading log files..." : "Select a log file to analyze"}
                         style={{ 
                             width: '100%', 
@@ -1067,12 +1067,12 @@ const QueryAnalyzer: React.FC = () => {
                                 boxShadow: '0 0 0 2px rgba(24,144,255,0.2)' 
                             } : {}) 
                         }}
-                        onChange={handleLogFileChange}
-                        filterOption={(input, option) =>
-                            option?.children
+                    onChange={handleLogFileChange}
+                    filterOption={(input, option) =>
+                        option?.children
                                 ? String(option.children).toLowerCase().includes(input.toLowerCase())
-                                : false
-                        }
+                            : false
+                    }
                         loading={fetchingLogFiles}
                         notFoundContent={fetchingLogFiles ? <Spin size="small" /> : "No log files found"}
                         value={selectedLogFile}
@@ -1108,7 +1108,7 @@ const QueryAnalyzer: React.FC = () => {
                                 </Option>
                             );
                         })}
-                    </Select>
+                </Select>
                     {!selectedLogFile && logFiles.length > 0 && (
                         <div style={{ marginTop: 5, color: '#1890ff', fontSize: 12, textAlign: 'center' }}>
                             <ArrowUpOutlined style={{ marginRight: 4 }} /> Click to open the dropdown and select a log file
@@ -1354,10 +1354,10 @@ const QueryAnalyzer: React.FC = () => {
                                     </div>
                                 </div>
 
-                                <Table
-                                    columns={columns}
+                        <Table
+                            columns={columns}
                                     dataSource={filteredLogs}
-                                    rowKey="uniqueId"
+                            rowKey="uniqueId"
                                     pagination={{
                                         pageSize: 50,
                                         showSizeChanger: true,
@@ -1375,10 +1375,10 @@ const QueryAnalyzer: React.FC = () => {
                                     fileName={selectedLogFile}
                                     threshold={slowQueryThreshold}
                                     onThresholdChange={setSlowQueryThreshold}
-                                />
-                            )
-                        )}
-                    </div>
+                        />
+                    )
+                )}
+            </div>
                 )}
             </div>
 
