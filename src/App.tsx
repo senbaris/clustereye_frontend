@@ -18,6 +18,7 @@ import Dashboard from './generalDashboard';
 import AlarmDashboard from './alarmdashboard';
 import ApplicationMapping from './applicationmapping';
 import Login from './pages/Login';
+import Settings from './settings';
 import { Provider, useDispatch } from 'react-redux';
 import { store } from './store';
 import { setAuth } from './store/authSlice';
@@ -67,6 +68,7 @@ const App: React.FC = () => {
                 <Route path="/alarmdashboard" element={<AlarmDashboard />} />
                 <Route path="/applicationmapping" element={<ApplicationMapping />} />
                 <Route path="/login" element={<Login />} />
+                <Route path="/settings" element={<Settings />} />
 
 
                 {/* Diğer route'lar... */}

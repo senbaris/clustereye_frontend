@@ -956,7 +956,7 @@ const PostgrePA: React.FC = () => {
                 WHERE calls > 0
                 AND shared_blks_hit > 0
                 ORDER BY calls DESC, hit_cache_ratio ASC
-                LIMIT 20;
+                LIMIT 5;
             `;
 
             const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
@@ -1544,7 +1544,7 @@ const PostgrePA: React.FC = () => {
         setIsLoadingMetrics(true);
         
         try {
-            const controller = new AbortController();
+        const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 60000);
             
             const agentId = `agent_${nodeNameParam}`;
@@ -1592,6 +1592,28 @@ const PostgrePA: React.FC = () => {
             });
             
             console.log('METRICS: Updated system metrics state');
+
+            // Force DOM update using requestAnimationFrame
+            requestAnimationFrame(() => {
+                const container = document.getElementById('metrics-container');
+                if (container) {
+                    console.log('METRICS: Forcing DOM update');
+                    // Adding a temporary class to trigger reflow
+                    container.classList.add('metrics-updated');
+                    // Read offsetHeight to force reflow
+                    const _ = container.offsetHeight;
+                    // Remove class
+                    container.classList.remove('metrics-updated');
+                    
+                    // Metrics yükleme durumunu burada kapatalım
+                    console.log('METRICS: Setting loading state to false after DOM update');
+                    setIsLoadingMetrics(false);
+                } else {
+                    console.log('METRICS: Could not find metrics container for force update');
+                    // Container bulunamasa bile loading state'i kapatalım
+                    setIsLoadingMetrics(false);
+                }
+            });
         } catch (error) {
             console.error('METRICS: Error fetching system metrics:', error);
             
@@ -1615,9 +1637,11 @@ const PostgrePA: React.FC = () => {
                 uptime: 0
             });
         } finally {
-            // Always set loading state to false when done
-            setIsLoadingMetrics(false);
+            // Always log completion
             console.log('METRICS: Fetch operation completed');
+            
+            // Loading state'i finally bloğunda kapamıyoruz, 
+            // bu değer başarılı fetch sonrası yukarıda kapatılıyor
         }
     };
 
@@ -2123,21 +2147,110 @@ const PostgrePA: React.FC = () => {
     const fetchQueryDbStats = async (nodeName: string, dbName: string) => {
         try {
             setIsLoadingDbStatsResults(true);
-            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/run_pg_dbstats`, {
+            
+            const agentId = `agent_${nodeName}`;
+            
+            // dbName parametresini kullanarak sorguyu düzenle
+            let query = '';
+            if (dbName && dbName !== 'ALL') {
+                // Belirli bir veritabanı seçildiyse sadece o veritabanına filtrele
+                query = `select * from pg_catalog.pg_stat_database where datname = '${dbName}'`;
+                console.log(`DB STATS: Fetching stats for specific database: ${dbName}`);
+            } else {
+                // Hiçbir veritabanı seçilmediyse veya ALL seçildiyse sistem veritabanları hariç hepsini getir
+                query = `select * from pg_catalog.pg_stat_database where datname not in ('postgres','template0','template1')`;
+                console.log(`DB STATS: Fetching stats for all user databases`);
+            }
+            
+            console.log(`DB STATS: Fetching database stats for node ${nodeName}`);
+            
+            const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/agents/${agentId}/query`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
-                body: JSON.stringify({ nodeName: nodeName, dbName: dbName }),
+                credentials: 'include',
+                body: JSON.stringify({
+                    query_id: 'pg_dbstats',
+                    command: query
+                })
             });
+            
             if (!response.ok) {
-                throw new Error('API response not ok');
+                throw new Error(`API response not ok: ${response.status} ${response.statusText}`);
             }
-            const data = await response.json() as QueryResultDbStats[];
-            setQueryResultsDbStats(data);
-            setIsLoadingDbStatsResults(false);
+            
+            const data = await response.json();
+            console.log('DB STATS: Received response data:', data);
+            
+            if (data.status === 'success' && data.result) {
+                const result = data.result;
+                if (result.type_url === 'type.googleapis.com/google.protobuf.Value') {
+                    try {
+                        const decodedValue = atob(result.value);
+                        const parsedResult = JSON.parse(decodedValue);
+                        console.log('DB STATS: Parsed result:', parsedResult);
+                        
+                        const queryResult: QueryResultDbStats[] = [];
+                        const rowCount = parsedResult.row_count || 0;
+                        
+                        for (let i = 0; i < rowCount; i++) {
+                            if (parsedResult[`datname_${i}`]) {
+                                queryResult.push({
+                                    datid: parsedResult[`datid_${i}`] || 0,
+                                    datname: parsedResult[`datname_${i}`] || '',
+                                    numbackends: parsedResult[`numbackends_${i}`] || 0,
+                                    xact_commit: parsedResult[`xact_commit_${i}`] || 0,
+                                    xact_rollback: parsedResult[`xact_rollback_${i}`] || 0,
+                                    blks_read: parsedResult[`blks_read_${i}`] || 0,
+                                    blks_hit: parsedResult[`blks_hit_${i}`] || 0,
+                                    tup_returned: parsedResult[`tup_returned_${i}`] || 0,
+                                    tup_fetched: parsedResult[`tup_fetched_${i}`] || 0,
+                                    tup_inserted: parsedResult[`tup_inserted_${i}`] || 0,
+                                    tup_updated: parsedResult[`tup_updated_${i}`] || 0,
+                                    tup_deleted: parsedResult[`tup_deleted_${i}`] || 0,
+                                    conflicts: parsedResult[`conflicts_${i}`] || 0,
+                                    temp_files: parsedResult[`temp_files_${i}`] || 0,
+                                    temp_bytes: parsedResult[`temp_bytes_${i}`] || 0,
+                                    deadlocks: parsedResult[`deadlocks_${i}`] || 0,
+                                    blk_read_time: parsedResult[`blk_read_time_${i}`] || 0,
+                                    blk_write_time: parsedResult[`blk_write_time_${i}`] || 0,
+                                    stats_reset: parsedResult[`stats_reset_${i}`] || '',
+                                    // Ekstra alanlar
+                                    sessions: parsedResult[`sessions_${i}`] || 0,
+                                    sessions_abandoned: parsedResult[`sessions_abandoned_${i}`] || 0,
+                                    sessions_fatal: parsedResult[`sessions_fatal_${i}`] || 0,
+                                    sessions_killed: parsedResult[`sessions_killed_${i}`] || 0,
+                                    active_time: parsedResult[`active_time_${i}`] || 0,
+                                    idle_in_transaction_time: parsedResult[`idle_in_transaction_time_${i}`] || 0,
+                                    session_time: parsedResult[`session_time_${i}`] || 0
+                                });
+                            }
+                        }
+                        
+                        setQueryResultsDbStats(queryResult);
+                        console.log('DB STATS: Successfully set DB stats results');
+                    } catch (error) {
+                        console.error('DB STATS: Error parsing result:', error);
+                        message.error('Error parsing database statistics');
+                        setQueryResultsDbStats([]);
+                    }
+                } else {
+                    console.error('DB STATS: Unexpected result type:', result.type_url);
+                    message.error('Unexpected database statistics result format');
+                    setQueryResultsDbStats([]);
+                }
+            } else {
+                console.error('DB STATS: Invalid response format:', data);
+                message.error('Invalid database statistics response format');
+                setQueryResultsDbStats([]);
+            }
         } catch (error) {
-            console.error('Error fetching data:', error);
+            console.error('DB STATS: Error fetching data:', error);
+            message.error(`Failed to load database statistics: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            setQueryResultsDbStats([]);
+        } finally {
             setIsLoadingDbStatsResults(false);
         }
     };
@@ -2461,8 +2574,12 @@ const PostgrePA: React.FC = () => {
                 } else if (selectedSubMenu === 'index-bloat' && selectedDatabase) {
                     await fetchQueryIndexBloat(nodeName, selectedDatabase);
                 } else if (selectedSubMenu === 'system' && activeTab === '4' && refreshInterval > 0) {
-                    console.log('Fetching metrics data due to refresh interval');
-                    await fetchSystemMetrics(nodeName);
+                    console.log('METRICS: Refresh interval triggered metrics fetch');
+                    // activeTab === '4' iken yeni durumda useEffect ile otomatik fetch yapıldığı için
+                    // burada sadece refreshInterval > 0 ve selectedSubMenu === 'system' ise çalışsın
+                    if (selectedSubMenu === 'system') {
+                        await fetchSystemMetrics(nodeName);
+                    }
                 } else if (selectedSubMenu === 'logs') {
                     await fetchPostgresLogs(nodeName);
                 } else if (selectedSubMenu === 'db-stats' && selectedDatabase) {
@@ -3007,27 +3124,61 @@ const PostgrePA: React.FC = () => {
             // Loading state'i başlangıçta aktif et
             setIsLoadingMetrics(true);
             
-            // Doğrudan setTimeout içinde çağıralım ki render cycle tamamlansın
-            const delayedFetch = setTimeout(async () => {
+            // Önce cache'den kontrol edelim
+            try {
+                const cachedData = localStorage.getItem('cachedMetrics');
+                if (cachedData) {
+                    const cache = JSON.parse(cachedData);
+                    // Only use cache if it's for the same node and not too old (15 minutes)
+                    if (cache.nodeName === nodeName && Date.now() - cache.timestamp < 15 * 60 * 1000) {
+                        console.log('METRICS: Loading metrics from cache initially');
+                        setSystemMetrics(cache.metrics);
+                        message.info('Showing cached metrics data. Refreshing in background...');
+                    }
+                }
+            } catch (e) {
+                console.warn('METRICS: Failed to load from cache', e);
+            }
+            
+            // İlk istek: İlk veri çekme işlemi
+            const fetchInitialData = async () => {
                 if (isMounted && activeTab === '4') {
-                    console.log('METRICS: Executing delayed fetch');
-                    
-                    // API çağrısı başarısız olsa bile bileşen güncellenmeli ve hata durumu kontrol edilmeli
+                    console.log('METRICS: First API request starting');
                     try {
                         await fetchSystemMetrics(nodeName);
+                        
+                        // İlk istek başarılı olduktan 500ms sonra ikinci isteği başlat
+                        if (isMounted && activeTab === '4') {
+                            console.log('METRICS: Scheduling second API request');
+                            setTimeout(async () => {
+                                if (isMounted && activeTab === '4') {
+                                    console.log('METRICS: Second API request starting');
+                                    try {
+                                        await fetchSystemMetrics(nodeName);
+                                        console.log('METRICS: Second API request completed');
+                                    } catch (error) {
+                                        console.error('METRICS: Error in second API request:', error);
+                                    }
+                                }
+                            }, 500);
+                        }
                     } catch (error) {
-                        console.error('METRICS: Error in useEffect fetch:', error);
-                        // Loading state'i her durumda kapat
+                        console.error('METRICS: Error in first API request:', error);
                         setIsLoadingMetrics(false);
                     }
                 }
+            };
+            
+            // İlk isteği 300ms gecikme ile başlat (bileşenin mount olması için)
+            const delayedInitialFetch = setTimeout(() => {
+                fetchInitialData();
             }, 300);
             
             // Cleanup function - component unmount olduğunda veya dependencies değiştiğinde
             return () => {
                 console.log('METRICS: Cleaning up useEffect');
                 isMounted = false;
-                clearTimeout(delayedFetch);
+                clearTimeout(delayedInitialFetch);
             };
         }
     }, [nodeName, activeTab]); // Sadece node veya tab değiştiğinde tetikle
@@ -3246,16 +3397,60 @@ const PostgrePA: React.FC = () => {
                                                 console.log('METRICS: Manual refresh button clicked');
                                                 // Reset state before fetching - ensures visual changes
                                                 setSystemMetrics(null);
-                                                if (nodeName) fetchSystemMetrics(nodeName);
+                                                setIsLoadingMetrics(true);
+                                                
+                                                // İlk isteği gönder
+                                                if (nodeName) {
+                                                    fetchSystemMetrics(nodeName)
+                                                        .then(() => {
+                                                            // İlk istek başarılı olduktan 500ms sonra ikinci isteği gönder
+                                                            console.log('METRICS: Button first request completed, scheduling second');
+                                                            setTimeout(() => {
+                                                                if (nodeName) {
+                                                                    console.log('METRICS: Button second request starting');
+                                                                    fetchSystemMetrics(nodeName)
+                                                                        .then(() => {
+                                                                            console.log('METRICS: Button second request completed');
+                                                                        })
+                                                                        .catch(err => {
+                                                                            console.error('METRICS: Button second request error:', err);
+                                                                        });
+                                                                }
+                                                            }, 500);
+                                                        })
+                                                        .catch(err => {
+                                                            console.error('METRICS: Button first request error:', err);
+                                                            setIsLoadingMetrics(false);
+                                                        });
+                                                }
                                             }} 
                                             icon={<ReloadOutlined />}
                                             loading={isLoadingMetrics}
                                             disabled={!nodeName || isLoadingMetrics}
+                                            style={{ background: '#1890ff', fontWeight: 'bold' }}
                                         >
                                             Refresh Metrics
                                         </Button>
                                     </div>
                                 </div>
+                                
+                                <Alert
+                                    type="info"
+                                    showIcon
+                                    closable
+                                    style={{ marginBottom: '16px' }}
+                                    message="HMR Troubleshooting"
+                                    description={
+                                        <div>
+                                            <p>If metrics don't load automatically, please try these steps:</p>
+                                            <ul>
+                                                <li>Click the "Refresh Metrics" button above</li>
+                                                <li>Check browser console for any errors</li>
+                                                <li>Try switching tabs and coming back</li>
+                                            </ul>
+                                        </div>
+                                    }
+                                />
                                 
                                 {!nodeName && (
                                     <Alert 

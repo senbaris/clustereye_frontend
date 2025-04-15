@@ -5,7 +5,7 @@ import { Badge, Layout, Menu, Space, Input, Tooltip } from 'antd';
 import { useSelector, useDispatch } from "react-redux";
 import SearchContext from './searchContext';
 import ErrorModal from './errorModal';
-import { LogoutOutlined, LoginOutlined, AlertOutlined } from '@ant-design/icons';
+import { LogoutOutlined, LoginOutlined, AlertOutlined, SettingOutlined } from '@ant-design/icons';
 import { MdOutlineStorage, MdOutlineTableChart, MdOutlineInventory, MdRocketLaunch, MdDashboard, MdOutlineSwapHoriz } from 'react-icons/md';
 import { AiOutlineAreaChart, AiFillCloud, AiOutlineFire, AiOutlineFileSearch } from 'react-icons/ai';
 import { logout } from './store/authSlice';
@@ -260,6 +260,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
                 }
               })()}
             </Space>
+          </div>
+          <div style={{ marginLeft: '10px', cursor: 'pointer' }} onClick={() => navigate('/settings')}>
+            <Tooltip title="Settings">
+              <SettingOutlined style={{ fontSize: '18px', color: 'white' }} />
+            </Tooltip>
           </div>
           <ErrorModal />
 

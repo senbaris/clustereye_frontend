@@ -1,20 +1,16 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect } from 'react';
 import './index.css';
-import { Space, Table, Tag, Popover, Modal, Spin, Button, Badge, Tooltip, DatePicker } from 'antd';
+import { Space,Modal, Spin, Button, Badge, Tooltip,message } from 'antd';
 import IconMongo from './icons/mongo'
 import CustomCardMongo from './customCardMongo';
-import IconStepdown from './icons/stepdown'
 import { useDispatch, useSelector } from 'react-redux';
-import { setHeadStats } from '../redux/redux';
-import SearchContext from './searchContext';
-import { useRef } from 'react';
-import { CheckCircleOutlined, CloseCircleOutlined, WarningOutlined, BellTwoTone, PlusOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, CloseCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import axios from 'axios';
-import moment, { Moment } from 'moment';
+import { Moment } from 'moment';
 import 'moment/locale/tr';
-import runningGif from './assets/Running.gif';
 import { RootState } from './store';
 import AddClusterModal from './components/AddClusterModal';
+import MongoTopology from './components/MongoTopology';
 
 
 interface MyData {
@@ -49,535 +45,295 @@ interface replicaNode {
 	replsetname?: string;
 	status: string;
 	version: string;
+	// Yeni API alanları
+	ClusterName?: string;
+	FDPercent?: number;
+	FreeDisk?: string;
+	Hostname?: string;
+	IP?: string;
+	Location?: string;
+	MongoStatus?: string;
+	MongoVersion?: string;
+	NodeStatus?: string;
+	ReplicaSetName?: string;
+	ReplicationLagSec?: number;
+	TotalDisk?: string;
 }
 
-interface NodeStatus {
-	nodename: string;
-	isUpdated: boolean;
+// Add a type definition for the Agent object
+interface Agent {
+	connection: string;
+	hostname: string;
+	id: string;
+	ip: string;
+	last_seen: string;
+	status: string;
 }
-
-
 
 const getReplicaDetail = (replicaNodes: replicaNode[]) => {
+	console.log('getReplicaDetail input:', replicaNodes);
+	
 	let color = "success";
 	const nodesWithElements = replicaNodes.map((node: replicaNode, index: number) => {
-		if (!["PRIMARY", "SECONDARY"].includes(node.status)) {
+		// Eski veya yeni API formatından status bilgisini al
+		const nodeStatus = node.status || node.NodeStatus || '';
+		
+		if (!["PRIMARY", "SECONDARY"].includes(nodeStatus)) {
 			color = "danger";
 		}
 		const nodeElement = (
 			<p key={index} style={{ color: color }}>
-				{node.nodename} - {node.status}
+				{node.nodename || node.Hostname} - {nodeStatus}
 			</p>
 		);
-		return {
-			nodename: node.nodename,
-			status: node.status,
-			version: node.version,
-			dc: node.dc,
-			ip: node.ip,
-			totalDisksize: node.totalDisksize,
-			freediskdata: node.freediskdata,
-			freediskpercent: node.freediskpercent,
+		
+		// Ham node objesi içeriğini consola yazdır
+		console.log(`Raw node ${index} content:`, node);
+		console.log(`Node ${index} MongoStatus:`, node.MongoStatus);
+		
+		// Eski veya yeni API formatından veri öğelerini al
+		const result = {
+			nodename: node.nodename || node.Hostname || '',
+			status: nodeStatus,
+			version: node.version || node.MongoVersion || '',
+			dc: node.dc || node.Location || '',
+			ip: node.ip || node.IP || '',
+			totalDisksize: node.totalDisksize || node.TotalDisk || 'N/A',
+			freediskdata: node.freediskdata || node.FreeDisk || 'N/A',
+			freediskpercent: node.freediskpercent || (node.FDPercent?.toString() || '0'),
 			nodeElement: nodeElement,
 			color: color,
+			// Yeni API alanlarını da ekle
+			MongoStatus: node.MongoStatus || 'UNKNOWN',
+			ReplicationLagSec: node.ReplicationLagSec
 		};
+		
+		console.log(`Processed node ${index} result:`, result);
+		return result;
 	});
 
 	return nodesWithElements;
 }
 
+const getFullNodeName = (nodeName: string): string => {
+	if (!nodeName) return '';
+	
+	if (nodeName.includes(".osp-") && !nodeName.includes(".hepsi.io")) {
+		return `${nodeName}.hepsi.io`;
+	} else if ((nodeName.includes("dpay") || nodeName.includes("altpay")) && !nodeName.includes(".dpay.int")) {
+		return `${nodeName}.dpay.int`;
+	}
+	return `${nodeName}.hepsiburada.dmz`;
+};
+
 const Mongo: React.FC = () => {
 	const dispatch = useDispatch();
-	const [activeReplSet, setActiveReplSet] = useState<replicaNode[]>([]);
+	const [selectedCard, setSelectedCard] = useState<string | null>(null);
+	const [activeCluster, setActiveCluster] = useState<any[]>([]);
 	const [data, setData] = useState<MyData[]>([]);
 	const [loading, setLoading] = useState(true);
 	const { isLoggedIn } = useSelector((state: RootState) => state.auth);
 	const [loading2, setLoading2] = useState(false);
-	const [panelCount, setPanelCount] = useState<number>(0);
-	const [nonStandardStatusCount, setNonStandardStatusCount] = useState<number>(0);
-	const [totalMemberCount, setTotalMemberCount] = useState<number>(0);
-	const [panelsWithOneDifferentStatusCount, setPanelsWithOneDifferentStatusCount] = useState<number>(0);
-	const [primaryMembersInEsenyurtCount, setPrimaryMembersInEsenyurtCount] = useState<number>(0);
-	const [primaryMembersInGebzeCount, setPrimaryMembersInGebzeCount] = useState<number>(0);
-	const [showOnlyEsenyurtPrimary] = useState<boolean>(false);
-	const [showOnlyGebzePrimary] = useState<boolean>(false);
 	const POLLING_INTERVAL = 5000;
-	const { searchTerm } = useContext(SearchContext);
-	const tableRef = useRef<HTMLDivElement>(null);
-	const [selectedCard, setSelectedCard] = useState<string | null>(null);
 	const [isSecondModalVisible, setIsSecondModalVisible] = useState(false);
 	const [operationResult, setOperationResult] = useState<{ success?: boolean, message?: string }>({});
-	const [selectedReplicaSetName, setSelectedReplicaSetName] = useState("");
-	const [nodeStatuses, setNodeStatuses] = useState<NodeStatus[]>([]);
 	const [connInfos, setConnInfos] = useState<{ [key: string]: ConnInfo }>({});
 	const [selectedTime, setSelectedTime] = useState<Moment | null>(null);
 	const [modalVisible, setModalVisible] = useState(false);
-	
-	// const keys = useKeycloak()?.keycloak;
+	const [agentStatuses, setAgentStatuses] = useState<{[key: string]: boolean}>({});
 
-	useEffect(() => {
-		// Keycloak kodu yerine Redux state'ini kullanıyoruz
-		// useEffect(() => {
-		//     setIsLoggedIn(keys?.authenticated || false)
-		// }, [keys?.authenticated]);
-		
-	}, []);
-
-	useEffect(() => {
-		const apiUrl = `${import.meta.env.VITE_REACT_APP_API_URL}/status`;
-		const fetchData = () => {
-			fetch(apiUrl)
-				.then((response) => response.json())
-				.then((responseData) => {
-					if (Array.isArray(responseData)) {
-						setData(responseData);
-					} else {
-						setData([]);
-						console.warn('API response is not an array:', responseData);
-					}
-					setLoading(false);
-				})
-				.catch((error) => {
-					console.error('Error fetching data:', error);
-					setData([]);
-					setLoading(false);
-				});
+	// Karta tıklama işlevi - topoloji görünümünü yönetmek için geliştirildi
+	const handle = (replSetName: string) => {
+		// Seçili kartı değiştir
+		if (selectedCard === replSetName) {
+			setSelectedCard(null); // Aynı karta tıklanırsa görünümü kapat
+			setActiveCluster([]); // Aktif küme verilerini temizle
+		} else {
+			setSelectedCard(replSetName); // Farklı bir karta tıklanırsa o kartı seç
+			
+			// Seçilen kümenin verilerini bul ve aktif küme olarak ayarla
+			const selectedClusterData = data.find(da => Object.keys(da)[0] === replSetName);
+			if (selectedClusterData) {
+				const replicaNodes = selectedClusterData[replSetName];
+				const detailedNodes = getReplicaDetail(replicaNodes);
+				setActiveCluster(detailedNodes);
+			}
 		}
+	};
 
-		fetchData(); // initial fetch
+	// useEffect ile data değiştiğinde active cluster verilerini güncelle
+	useEffect(() => {
+		if (selectedCard && data.length > 0) {
+			const selectedClusterData = data.find(da => Object.keys(da)[0] === selectedCard);
+			if (selectedClusterData) {
+				const replicaNodes = selectedClusterData[selectedCard];
+				const detailedNodes = getReplicaDetail(replicaNodes);
+				setActiveCluster(detailedNodes);
+			}
+		}
+	}, [data, selectedCard]);
+
+	useEffect(() => {
+		fetchMongoData();
+		fetchAgentStatuses();
 
 		const intervalId = setInterval(() => {
-			fetchData(); // Fetch data at intervals
-			// Cleanup at intervals
+			fetchMongoData();
+			fetchAgentStatuses();
 		}, POLLING_INTERVAL);
 
-
 		return () => clearInterval(intervalId); // cleanup
-
 	}, []);
 
-	useEffect(() => {
-		const intervalId = setInterval(async () => {
-			try {
-				const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/checkalarms`, {
-					method: 'POST',
-				});
-				if (!response.ok) {
-					throw new Error('Network response was not ok');
-				}
-				fetchConnInfos(); // Alarm durumu değiştiğinde tekrar fetch yaparak güncelleyebiliriz
-			} catch (error) {
-				console.error('Failed to check alarms:', error);
-			}
-		}, 5000); // Her 60 saniyede bir kontrol eder
-
-		return () => clearInterval(intervalId); // Temizleme işlevi
-	}, []);
-
-
-
-
-
-	const fetchConnInfos = async () => {
+	const fetchMongoData = async () => {
 		try {
-			const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/conninfo`);
-			const data = await response.json();
 			
-			if (Array.isArray(data)) {
-				const infoMap = data.reduce((acc, curr) => {
-					acc[curr.nodename] = curr;
-					return acc;
-				}, {} as { [key: string]: ConnInfo });
-				setConnInfos(infoMap);
+			
+			// localStorage'dan token al
+			const token = localStorage.getItem('token');
+			
+			if (!token) {
+				console.warn('No authentication token found, proceeding without authentication');
+			}
+			
+			// API call to fetch MongoDB status
+			const response = await fetch(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/status/mongo`, {
+				method: 'GET',
+				headers: {
+					'Content-Type': 'application/json',
+					'Accept': 'application/json',
+					...(token ? { 'Authorization': `Bearer ${token}` } : {})
+				},
+				credentials: 'include'
+			});
+			
+			if (!response.ok) {
+				throw new Error(`Error fetching MongoDB status: ${response.status} - ${response.statusText}`);
+			}
+			
+			const responseData = await response.json();
+			console.log('MongoDB API response (RAW):', JSON.stringify(responseData, null, 2));
+			
+			if (responseData.status === "success" && Array.isArray(responseData.data)) {
+				// Yeni API yanıt formatı detaylı inceleme
+				console.log('MongoDB API response has new format with status and data fields');
+				console.log('Data array length:', responseData.data.length);
+				if (responseData.data.length > 0) {
+					const firstCluster = responseData.data[0];
+					const clusterName = Object.keys(firstCluster)[0];
+					console.log('First cluster name:', clusterName);
+					console.log('First cluster sample node:', firstCluster[clusterName][0]);
+				}
+				
+				// Yeni API yanıt formatını işle
+				const transformedData = responseData.data.map((clusterObj: any) => {
+					// Her bir küme objesi için dönüştürme
+					const clusterName = Object.keys(clusterObj)[0];
+					const nodes = clusterObj[clusterName];
+					
+					console.log(`Cluster ${clusterName} raw node data:`, nodes);
+					
+					// Her küme için yeni bir obje döndür
+					return {
+						[clusterName]: nodes.map((node: any) => {
+							console.log(`Node ${node.Hostname} raw data:`, node);
+							console.log(`Node ${node.Hostname} MongoStatus:`, node.MongoStatus);
+							
+							const transformedNode = {
+								// Eski veri formatına dönüştür
+								dc: node.Location || 'Unknown',
+								totalDisksize: node.TotalDisk || 'N/A',
+								freediskdata: node.FreeDisk || 'N/A',
+								freediskpercent: node.FDPercent?.toString() || '0',
+								ip: node.IP || 'N/A',
+								nodename: node.Hostname || 'unknown',
+								replsetname: node.ReplicaSetName || clusterName,
+								status: node.NodeStatus || 'UNKNOWN',
+								version: node.MongoVersion || 'N/A',
+								// MongoStatus'ü de ekleyelim
+								MongoStatus: node.MongoStatus || 'UNKNOWN',
+								// Diğer yeni API alanlarını da ekleyelim
+								Hostname: node.Hostname,
+								NodeStatus: node.NodeStatus,
+								Location: node.Location,
+								IP: node.IP,
+								MongoVersion: node.MongoVersion,
+								ReplicaSetName: node.ReplicaSetName,
+								ReplicationLagSec: node.ReplicationLagSec,
+								FDPercent: node.FDPercent,
+								FreeDisk: node.FreeDisk,
+								TotalDisk: node.TotalDisk
+							};
+							console.log(`Node ${node.Hostname} transformed:`, transformedNode);
+							return transformedNode;
+						})
+					};
+				});
+				
+				console.log('Transformed MongoDB data:', transformedData);
+				setData(transformedData);
+			} else if (Array.isArray(responseData)) {
+				// Eski format hala destekli
+				setData(responseData);
 			} else {
-				console.warn('Connection info response is not an array:', data);
-				setConnInfos({});
+				setData([]);
+				console.warn('API response does not contain expected data structure:', responseData);
 			}
 		} catch (error) {
-			console.error('Failed to fetch connection info:', error);
-			setConnInfos({}); // Hata durumunda boş obje
+			console.error('Error fetching MongoDB data:', error);
+			message.error(`Failed to fetch MongoDB clusters: ${error instanceof Error ? error.message : 'Unknown error'}`);
+			setData([]);
+		} finally {
+			setLoading(false);
 		}
 	};
 
-	useEffect(() => {
-		fetchConnInfos();
-	}, []);
-
-
-	useEffect(() => {
-		dispatch(setHeadStats({
-			panelName: 'mongo',
-			panelCount: panelCount,
-			nonStandardStatusCount: nonStandardStatusCount,
-			totalMemberCount: totalMemberCount,
-			panelsWithOneDifferentStatusCount: panelsWithOneDifferentStatusCount,
-			primaryMembersInEsenyurtCount: primaryMembersInEsenyurtCount,
-			primaryMembersInGebzeCount: primaryMembersInGebzeCount,
-		}));// eslint-disable-next-line
-	}, [panelCount, nonStandardStatusCount, totalMemberCount, panelsWithOneDifferentStatusCount, primaryMembersInEsenyurtCount, primaryMembersInGebzeCount])
-
-	useEffect(() => {
-		// Partially healtyh count
-		let panelsWithOneDifferentStatusCount = 0;
-		const faultyNodes: { name: string, status: string }[] = [];
-		const currentFaultyNodesSet = new Set<string>();
-
-		data.forEach((panelData: MyData) => {
-			const membersInPanel = Object.values(panelData)[0] as replicaNode[];
-			const nonStandardMembers = membersInPanel.filter((member: replicaNode) =>
-				!["SECONDARY", "ARBITER", "PRIMARY"].includes(member.status)
-			);
-
-			if (nonStandardMembers.length === 1) {
-				panelsWithOneDifferentStatusCount++;
-				faultyNodes.push({
-					name: nonStandardMembers[0].nodename,
-					status: nonStandardMembers[0].status
-				});
-				currentFaultyNodesSet.add(nonStandardMembers[0].nodename);
+	const fetchAgentStatuses = async () => {
+		try {
+			// localStorage'dan token al
+			const token = localStorage.getItem('token');
+			
+			if (!token) {
+				console.warn('No authentication token found, proceeding without authentication');
 			}
-		});
-
-		// Total Cluster Count
-		setPanelCount(data.length);
-
-		// Total UnHealthy Nodes Count and Total Nodes Count
-		let count = 0;
-		const allMembersCount = Array.isArray(data) ? data.reduce((total, panelData) => {
-			const members = Object.values(panelData)[0];
-			if (Array.isArray(members)) {
-				return total + members.length;
-			}
-			return total;
-		}, 0) : 0;
-
-		data.forEach((panelObject: MyData) => {
-			Object.values(panelObject).forEach((panel: replicaNode[]) => {
-				panel.forEach((member: replicaNode) => {
-					if (!["PRIMARY", "SECONDARY", "ARBITER"].includes(member.status)) {
-						count++;
+			
+			// API call to fetch agent statuses
+			const agentResponse = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/api/v1/status/agents`, {
+				headers: {
+					'Content-Type': 'application/json',
+					'Accept': 'application/json',
+					...(token ? { 'Authorization': `Bearer ${token}` } : {})
+				}
+			});
+			
+			// Check for the expected data structure
+			if (agentResponse.data?.status === "success" && Array.isArray(agentResponse.data?.data?.agents)) {
+				const agentList = agentResponse.data.data.agents;
+				const newAgentStatuses: {[key: string]: boolean} = {};
+				
+				// Process agent statuses from the array structure
+				agentList.forEach((agent: Agent) => {
+					if (agent.hostname && agent.status) {
+						// An agent is active if its status is "connected"
+						const isActive = agent.status === "connected";
+						
+						// Add with domain extensions for different environments
+						newAgentStatuses[agent.hostname] = isActive;
+						newAgentStatuses[`${agent.hostname}.hepsiburada.dmz`] = isActive;
+						newAgentStatuses[`${agent.hostname}.hepsi.io`] = isActive;
+						newAgentStatuses[`${agent.hostname}.dpay.int`] = isActive;
 					}
 				});
-			});
-		});
-
-		setNonStandardStatusCount(count);
-		setTotalMemberCount(allMembersCount);
-		setPanelsWithOneDifferentStatusCount(panelsWithOneDifferentStatusCount);
-
-		const primaryEsenyurtCount = data.reduce((count: number, panelData: MyData) => {
-			const membersInPanel = Object.values(panelData)[0] as replicaNode[];
-			const primaryInEsenyurt = membersInPanel.filter((member: replicaNode) =>
-				member.dc === 'Esenyurt' && member.status === 'PRIMARY'
-			).length;
-			return count + primaryInEsenyurt;
-		}, 0);
-		setPrimaryMembersInEsenyurtCount(primaryEsenyurtCount);
-
-		const primaryGebzeCount = data.reduce((count: number, panelData: MyData) => {
-			const membersInPanel = Object.values(panelData)[0] as replicaNode[];
-			const primaryInGebze = membersInPanel.filter((member: replicaNode) =>
-				member.dc === 'Gebze' && member.status === 'PRIMARY'
-			).length;
-			return count + primaryInGebze;
-		}, 0);
-		setPrimaryMembersInGebzeCount(primaryGebzeCount);
-	}, [data]);
-
-	const getFullNodeName = (nodeName: string): string => {
-		if (nodeName.includes(".osp-") && !nodeName.includes(".hepsi.io")) {
-			return `${nodeName}.hepsi.io`;
-		} else if ((nodeName.includes("dpay") || nodeName.includes("altpay")) && !nodeName.includes(".dpay.int")) {
-			return `${nodeName}.dpay.int`;
-		}
-		return `${nodeName}.hepsiburada.dmz`;
-	};
-
-
-	const columns = [
-		{
-			title: 'Node Name',
-			dataIndex: 'nodename',
-			key: 'nodename',
-			render: (nodename: string, record: any) => {
-				const isNodeUpdated = record.isUpdated;
-
-				return (
-					<div style={{ display: 'flex', alignItems: 'center' }}>
-						<span>{nodename}</span>
-						<Tooltip title={isNodeUpdated ? "Agent is Running" : "Agent is Not Running"}>
-							{isNodeUpdated ? (
-								<img
-									src={runningGif}
-									alt="Running"
-									style={{ width: 16, height: 16, marginLeft: 8, cursor: 'pointer' }}
-								/>
-							) : (
-								<CloseCircleOutlined
-									style={{ color: 'red', marginLeft: 8, cursor: 'pointer' }}
-								/>
-							)}
-						</Tooltip>
-					</div>
-				);
-			},
-		},
-		{
-			title: 'Status',
-			dataIndex: 'status',
-			key: 'status',
-			render: (text: string, record: any) => {
-				let color;
-				if (text === 'PRIMARY' || text === 'SECONDARY') {
-					color = 'green';
-				} else if (text === 'ARBITER') {
-					color = 'geekblue';
-				} else {
-					color = 'volcano';
-				}
-
-				const fullNodeName = record?.nodename ? getFullNodeName(record.nodename) : null;
-				if (!fullNodeName || !connInfos[fullNodeName]) {
-					return (
-						<Tag color={color} style={{ marginRight: 8 }}>
-							{text}
-						</Tag>
-					);
-				}
-
-				const syncStatus = connInfos[fullNodeName]?.sync_status?.Valid ? `${connInfos[fullNodeName].sync_status.Int32}%` : null;
-
-				// sync_collection alanını güvenli şekilde kontrol etme
-				const collectionName = connInfos[fullNodeName]?.sync_collection?.Valid
-					? connInfos[fullNodeName]!.sync_collection!.String
-					: null;
-
-				const statusText = syncStatus ? `${text} - ${syncStatus}` : text;
-
-				return (
-					<Tooltip title={collectionName || "No Collection Name"}>
-						<Tag color={color} style={{ marginRight: 8 }}>
-							{statusText}
-						</Tag>
-					</Tooltip>
-				);
-			},
-		},
-		{
-			title: 'Ip',
-			dataIndex: 'ip',
-			key: 'ip',
-		},
-		{
-			title: 'Dc',
-			dataIndex: 'dc',
-			key: 'dc',
-			render: (text: string) => {
-				let color;
-				if (text === 'Esenyurt') {
-					color = 'blue';
-				} else if (text === 'Gebze') {
-					color = 'yellow';
-				} else {
-					color = 'volcano';
-				}
-
-				return (
-					<Tag color={color}>
-						{text}
-					</Tag>
-				);
-			},
-		},
-		{
-			title: 'Total Disk',
-			dataIndex: 'totalDisksize',
-			key: 'totalDisksize',
-		},
-		{
-			title: 'Free Disk',
-			dataIndex: 'freediskdata',
-			key: 'freediskdata',
-		},
-		{
-			title: 'Free Disk %',
-			dataIndex: 'freediskpercent',
-			key: 'freediskpercent',
-			render: (freediskpercent: number, record: replicaNode) => {
-				let color = 'green';
-				let icon = <CheckCircleOutlined style={{ color: 'green', marginRight: 4 }} />;
-
-				if (freediskpercent < 25) {
-					color = 'volcano';
-					icon = <WarningOutlined style={{ color: 'orange', marginRight: 4 }} />;
-				}
-
-				const fullNodeName = getFullNodeName(record.nodename);
-
-				// silence_until alanını moment nesnesine dönüştür
-				const silenceUntilRaw = connInfos[fullNodeName]?.silence_until;
-				const initialDate = silenceUntilRaw && silenceUntilRaw.Valid
-					? moment.utc(silenceUntilRaw.Time) // UTC'den yerel zamana dönüştür
-					: null;// moment ile dönüştürülmüş hali
-
-				let tooltipMessage = "Alarm On"; // Varsayılan
-
-				// Eğer alarm kapalıysa (send_diskalarm false)
-				if (!connInfos[fullNodeName]?.send_diskalert) {
-					// Eğer tarih geçerliyse
-					if (initialDate && initialDate.isValid()) {
-						tooltipMessage = `Alarm Off Until ${initialDate.format("DD.MM.YYYY HH:mm")}`;
-					} else {
-						tooltipMessage = "Alarm Off";
-					}
-				}
-
-				return (
-					<div style={{ display: 'flex', alignItems: 'center' }}>
-						<Tag color={color} style={{ marginRight: 8 }}>
-							{icon}
-							{`${freediskpercent}%`}
-						</Tag>
-						{isLoggedIn && (
-							<>
-								<Tooltip title={tooltipMessage}>
-									<Button
-										type="link"
-										icon={
-											connInfos[fullNodeName]?.send_diskalert ? (
-												<BellTwoTone twoToneColor="#52c41a" />
-											) : (
-												<BellTwoTone twoToneColor="#ff0000" />
-											)
-										}
-										onClick={() => {
-											setSelectedTime(null); // Reset the selectedTime state
-											handleSilentAlarm(record.nodename);
-										}}
-									/>
-								</Tooltip>
-								<DatePicker
-									showTime
-									format="YYYY-MM-DD HH:mm:ss"
-									placeholder="Alarm Off Until.."
-									onChange={(value) => setSelectedTime(value ? moment(value.toISOString()) : null)}
-								/>
-							</>
-						)}
-					</div>
-				);
-			},
-		},
-		{
-			title: 'Version',
-			dataIndex: 'version',
-			key: 'version',
-		},
-	];
-
-
-	const filteredData = (showOnlyEsenyurtPrimary || showOnlyGebzePrimary) ? data.filter(panelData => {
-		const membersInPanel = Object.values(panelData)[0] as replicaNode[];
-		return (
-			(showOnlyEsenyurtPrimary && membersInPanel.some(member => member.dc === 'Esenyurt' && member.status === 'PRIMARY')) ||
-			(showOnlyGebzePrimary && membersInPanel.some(member => member.dc === 'Gebze' && member.status === 'PRIMARY'))
-		);
-	}) : data;
-
-	const filteredDataSearch = React.useMemo(() => {
-		let results = data;
-
-		// Search term için filtreleme
-		if (searchTerm) {
-			results = results.filter(panelData => {
-				return Object.keys(panelData).some(key => key.toLowerCase().includes(searchTerm.toLowerCase()));
-			});
-		}
-
-		return results;
-	}, [data, searchTerm]);
-
-	useEffect(() => {
-		const fetchData = async () => {
-			try {
-				const response = await axios.get(`${import.meta.env.VITE_REACT_APP_API_URL}/agentstatus`);
-				const nodeData = response.data; // {"mongo-dba-test-01":"00:08:37", "mongo-dba-test-02":"00:08:37", ...}
-
-				const newStatuses = Object.keys(nodeData).map(nodename => {
-					const nodeTime = moment(nodeData[nodename], "YYYY-MM-DDTHH:mm:ss");
-					const isUpdatedRecently = nodeTime.isAfter(moment().subtract(2, 'minutes'));
-
-					return { nodename, isUpdated: isUpdatedRecently };
-				});
-
-				setNodeStatuses(newStatuses);
-			} catch (error) {
-				console.error('Error fetching data: ', error);
+				
+				console.log('Agent statuses updated:', newAgentStatuses);
+				setAgentStatuses(newAgentStatuses);
+			} else {
+				console.warn('Unexpected agent status response format:', agentResponse.data);
 			}
-		};
-
-		fetchData();
-		const intervalId = setInterval(fetchData, POLLING_INTERVAL);
-
-		return () => clearInterval(intervalId);
-	}, []);
-
-
-	const normalizeNodeName = (name: string) => {
-		const trimmedName = name.trim().toLowerCase();
-
-		if (trimmedName.includes('osp-r2-st') || trimmedName.includes('osp-r1-st')) {
-			if (!trimmedName.endsWith('.hepsi.io')) {
-				return trimmedName.replace(/\.hepsiburada\.dmz$|\.dpay\.int$/, '') + '.hepsi.io';
-			}
-		} else if (trimmedName.includes('dpay') || trimmedName.includes('altpay')) {
-			if (!trimmedName.endsWith('.dpay.int')) {
-				return trimmedName.replace(/\.hepsiburada\.dmz$|\.hepsi\.io$/, '') + '.dpay.int';
-			}
-		} else {
-			if (!trimmedName.endsWith('.hepsiburada.dmz')) {
-				return trimmedName.replace(/\.hepsi\.io$|\.dpay\.int$/, '') + '.hepsiburada.dmz';
-			}
-		}
-
-		return trimmedName;
-	};
-
-
-
-	const handle = (replSetName: string) => {
-		setSelectedReplicaSetName(replSetName);
-		if (selectedCard === replSetName) {
-			setSelectedCard(''); // Eğer aynı karta tıklanırsa efekti kaldır
-			setActiveReplSet([]); // Veriyi temizle
-		} else {
-			setSelectedCard(replSetName); // Farklı bir karta tıklanırsa o kartın ismini sakla
-
-			const filteredArray = filteredData.filter(item => replSetName in item);
-			const repDetails = getReplicaDetail(filteredArray[0][replSetName]);
-
-			const dataSource = repDetails.map((detail) => {
-				const nodeStatus = nodeStatuses.find(status =>
-					normalizeNodeName(status.nodename) === normalizeNodeName(detail.nodename)
-				);
-				return {
-					replicasetname: replSetName,
-					key: detail.nodename,
-					nodename: detail.nodename,
-					status: detail.status,
-					ip: detail.ip,
-					dc: detail.dc,
-					totalDisksize: detail.totalDisksize,
-					freediskdata: detail.freediskdata,
-					freediskpercent: detail.freediskpercent,
-					version: detail.version,
-					isUpdated: nodeStatus ? nodeStatus.isUpdated : false, // isUpdated field added here
-				};
-			});
-			setActiveReplSet(dataSource);
+		} catch (error) {
+			console.error('Error fetching agent statuses:', error);
 		}
 	};
-
 
 	const handleSilentAlarm = async (nodeName: string): Promise<void> => {
 		const fullNodeName = getFullNodeName(nodeName);
@@ -620,7 +376,6 @@ const Mongo: React.FC = () => {
 		}
 	};
 
-
 	async function handleIconStepdownClick(nodeName: string): Promise<void> {
 		const fullNodeName = `${nodeName}.hepsiburada.dmz`;
 		const dbstatusAPI = `${import.meta.env.VITE_REACT_APP_API_URL}/stepdown`;
@@ -649,37 +404,12 @@ const Mongo: React.FC = () => {
 			setOperationResult({ success: false, message: 'An error occurred!' });
 		}
 	}
-
-
-	function showConfirmStepdown(nodeName: string) {
-		Modal.confirm({
-			title: 'Are you sure?',
-			content: `Do you want to execute stepdown() for ${nodeName}?`,
-			onOk: async () => {
-				setIsSecondModalVisible(true);
-				handleIconStepdownClick(nodeName); // nodeName bilgisini fonksiyona ilettik
-				setLoading2(false);
-
-			},
-			onCancel() {
-
-			},
-		});
-	}
+	
 	const handleSecondModalClose = () => {
 		setIsSecondModalVisible(false);
 	}
 
-	useEffect(() => {
-		if (activeReplSet.length > 0 && tableRef.current) {
-			window.scrollTo({
-				top: tableRef.current.offsetTop,
-				behavior: 'smooth',
-			});
-		}
-	}, [activeReplSet]);
-
-	const getPanelStyleClasses = (repDetails: replicaNode[]) => {
+	const getPanelStyleClasses = (repDetails: any[]) => {
 		const nonSecondaryCount = repDetails.filter(
 			(detail) =>
 				detail.status !== 'PRIMARY' &&
@@ -733,10 +463,22 @@ const Mongo: React.FC = () => {
 
 	return (
 		<>
-			<Space direction="vertical" size="middle" style={{ display: 'flex' }}>
+			<Space direction="vertical" size="middle" style={{ display: 'flex', width: '100%' }}>
+				{/* Refresh butonunu içeren div'i kaldırıyoruz */}
+				{/* <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+					<Button 
+						onClick={handleRefreshData} 
+						icon={<SyncOutlined spin={isRefreshing} />}
+						loading={isRefreshing}
+						type="primary"
+					>
+						Refresh
+					</Button>
+				</div> */}
+				
 				{loading ? (
 					<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
-						<Spin size="large" />
+						<Spin size="large" tip="Loading MongoDB cluster data..." />
 					</div>
 				) : (
 					<>
@@ -754,7 +496,7 @@ const Mongo: React.FC = () => {
 							}}>
 								<IconMongo size="60" color="#47A248" />
 								<h2 style={{ marginTop: '20px' }}>No MongoDB Clusters Found</h2>
-								<p>You haven't added any MongoDB clusters yet.</p>
+								<p>No MongoDB clusters are available. This could be because no clusters have been added yet or there was an error fetching data.</p>
 								{isLoggedIn && (
 									<Button 
 										type="primary" 
@@ -767,131 +509,111 @@ const Mongo: React.FC = () => {
 								)}
 							</div>
 						) : (
-							<div className="stats-container">
-								<div key={"sad"} className="panels-wrapper">
-									{filteredDataSearch
-										.sort((a, b) => {
-											const aKey = Object.keys(a)[0];
-											const bKey = Object.keys(b)[0];
-											return aKey.localeCompare(bKey);
-										})
-										.map((da) => {
-											return Object.keys(da).map((replicasetname, index) => {
-												const replicaNodes = da[replicasetname];
-												const detailedNodes = getReplicaDetail(replicaNodes);
+							<>
+								<div className="stats-container">
+									<div key={"sad"} className="panels-wrapper">
+										{data
+											.sort((a: MyData, b: MyData) => {
+												const aKey = Object.keys(a)[0];
+												const bKey = Object.keys(b)[0];
+												return aKey.localeCompare(bKey);
+											})
+											.map((da: MyData) => {
+												return Object.keys(da).map((replicasetname, index) => {
+													const replicaNodes = da[replicasetname];
+													const detailedNodes = getReplicaDetail(replicaNodes);
 
-												const isNodeUpdated = detailedNodes.every((nodeDetail) => {
-													const nodeStatus = nodeStatuses.find(
-														(status) =>
-															status.nodename === `${nodeDetail.nodename}.hepsiburada.dmz` ||
-															status.nodename === `${nodeDetail.nodename}.hepsi.io` ||
-															status.nodename === `${nodeDetail.nodename}.dpay.int`
-													);
-													return nodeStatus?.isUpdated ?? false;
-												});
+													// Check agent status for each node in the replica set
+													const isNodeUpdated = detailedNodes.some((nodeDetail) => {
+														// Extract base hostname without domain
+														const baseNodeName = nodeDetail.nodename;
+														
+														// Check if the base hostname or any of its domain variations exist in agentStatuses
+														return agentStatuses[baseNodeName] || 
+															agentStatuses[`${baseNodeName}.hepsiburada.dmz`] || 
+															agentStatuses[`${baseNodeName}.hepsi.io`] || 
+															agentStatuses[`${baseNodeName}.dpay.int`];
+													});
 
-												const styleClasses = getPanelStyleClasses(detailedNodes);
+													const styleClasses = getPanelStyleClasses(detailedNodes);
 
-												return (
-													<Tooltip
-														title={styleClasses.tooltip} // Tooltip mesajını burada kullanıyoruz
-														placement="top"
-														color="red"
-														key={`tooltip_${replicasetname}_${index}`}
-													>
-														<div
-															key={`div1_${replicasetname}_${index}`}
-															className={`${styleClasses.containerClass} ${
-																selectedCard === replicasetname ? 'card-container bn6' : ''
-															}`}
-															style={{ margin: 4, cursor: 'pointer' }}
+													return (
+														<Tooltip
+															title={styleClasses.tooltip} // Tooltip mesajını burada kullanıyoruz
+															placement="top"
+															color="red"
+															key={`tooltip_${replicasetname}_${index}`}
 														>
-															<Badge
-																key={`badge${index}`}
-																status={isNodeUpdated ? 'processing' : 'error'}
-																color={isNodeUpdated ? 'green' : 'red'}
-																dot
-																offset={[-2, 2]}
+															<div
+																key={`div1_${replicasetname}_${index}`}
+																className={`${styleClasses.containerClass} ${
+																	selectedCard === replicasetname ? 'card-container bn6' : ''
+																}`}
+																style={{ margin: 4, cursor: 'pointer' }}
 															>
-																<CustomCardMongo
-																	iconColor={styleClasses.iconColor}
-																	clusterName={replicasetname}
-																	nodes={detailedNodes}
-																	key={`card1${index}`}
-																	onClick={() => handle(replicasetname)}
+																<Badge
+																	key={`badge${index}`}
+																	status={isNodeUpdated ? 'processing' : 'error'}
+																	color={isNodeUpdated ? 'green' : 'red'}
+																	dot
+																	offset={[-2, 2]}
 																>
-																	<div
-																		key={`div2${index}`}
-																		style={{ display: 'flex', alignItems: 'center' }}
+																	<CustomCardMongo
+																		iconColor={styleClasses.iconColor}
+																		clusterName={replicasetname}
+																		nodes={detailedNodes}
+																		key={`card1${index}`}
+																		onClick={() => handle(replicasetname)}
 																	>
-																		<IconMongo
-																			key={`icon1${index}`}
-																			size="25"
-																			color={styleClasses.iconColor}
-																		/>
-																		<span
-																			key={`span1${index}`}
-																			style={{
-																				marginLeft: 8,
-																				whiteSpace: 'nowrap',
-																				overflow: 'hidden',
-																				fontSize: '12px',
-																				textOverflow: 'ellipsis',
-																				maxWidth: 'calc(100% - 25px - 8px)',
-																			}}
+																		<div
+																			key={`div2${index}`}
+																			style={{ display: 'flex', alignItems: 'center' }}
 																		>
-																			{replicasetname}
-																		</span>
-																	</div>
-																</CustomCardMongo>
-															</Badge>
-														</div>
-													</Tooltip>
-												);
-											});
-										})}
+																			<IconMongo
+																				key={`icon1${index}`}
+																				size="25"
+																				color={styleClasses.iconColor}
+																			/>
+																			<span
+																				key={`span1${index}`}
+																				style={{
+																					marginLeft: 8,
+																					whiteSpace: 'nowrap',
+																					overflow: 'hidden',
+																					fontSize: '12px',
+																					textOverflow: 'ellipsis',
+																					maxWidth: 'calc(100% - 25px - 8px)',
+																				}}
+																			>
+																				{replicasetname}
+																			</span>
+																		</div>
+																	</CustomCardMongo>
+																</Badge>
+															</div>
+														</Tooltip>
+													);
+												});
+											})}
+									</div>
 								</div>
-							</div>
+				
+								{/* Seçili kartın topoloji görünümü */}
+								{selectedCard && activeCluster.length > 0 && (
+									<div style={{ marginTop: 16 }}>
+										<MongoTopology
+											nodes={activeCluster}
+											key={`topology-${selectedCard}-${JSON.stringify(activeCluster)}`}
+										/>
+									</div>
+								)}
+							</>
 						)}
 					</>
 				)}
 			</Space>
 
-			{
-				activeReplSet.length > 0 &&
-				<div ref={tableRef} style={{ position: 'relative' }}>
-					<Badge.Ribbon color='#4faa40ff' text={<span style={{ fontWeight: 'bold' }}>{selectedReplicaSetName}</span>} placement="end" style={{ zIndex: 1000 }}>
-					</Badge.Ribbon>
-					<Table className='textclr'
-						style={{ marginTop: 10 }}
-						columns={columns}
-						expandable={{
-							expandedRowRender: isLoggedIn ? (record: replicaNode) => {
-								if (record.status === "PRIMARY") {
-									return (
-										<div>
-											<Popover content="stepdown()"><a href="#" onClick={() => showConfirmStepdown(record.nodename)} style={{ marginRight: 10 }}>
-												<IconStepdown color='red' />
-											</a></Popover>
-
-
-										</div>
-
-									);
-								}
-							} : undefined,
-						}}
-						title={() => (
-							<div style={{ display: 'flex', alignItems: 'left' }}>
-
-							</div>
-						)}
-						dataSource={activeReplSet}
-						pagination={false}
-					/>
-				</div>
-			}
-			{/* İkinci Modal */}
+			{/* Stepdown Process Modal */}
 			<Modal
 				title="stepDown Process"
 				open={isSecondModalVisible}

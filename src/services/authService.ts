@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost';
+// URL'i çevre değişkeninden al, bu sayede farklı ortamlar için farklı değerler kullanılabilir
+const API_URL = import.meta.env.VITE_REACT_APP_API_URL || 'http://localhost';
 
 export interface LoginResponse {
   success: boolean;
@@ -12,9 +13,15 @@ export interface LoginResponse {
 }
 
 export const loginUser = async (username: string, password: string): Promise<LoginResponse> => {
-  const response = await axios.post(`${API_URL}/login`, {
+  const response = await axios.post(`${API_URL}/api/v1/login`, {
     username,
     password
+  }, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    withCredentials: true
   });
   
   if (response.data.token) {
