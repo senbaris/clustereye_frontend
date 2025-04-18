@@ -705,12 +705,13 @@ const PostgrePA: React.FC = () => {
     const [loadingClusterName, setLoadingClusterName] = useState(false);
     const [loadingPgLogs, setLoadingPgLogs] = useState(false);
     const [clusterNames, setClusterNames] = useState<string[]>([]); // Tüm cluster isimleri
-    const [nodeName, setNodeName] = useState(''); // Seçilen nodeName
+    const [nodeName, setNodeName] = useState(''); // Initial empty, will be set in useEffect
     const [data, setData] = useState<Record<string, Node[]>>({}); // API'den gelen veri yapısına uygun tip
     const [nodeInfo, setNodeInfo] = useState<{ name: string; status: string; PGVersion: string }[]>([]);
     const location = useLocation();
     const queryParams = new URLSearchParams(location.search);
     const clusterNameFromURL = queryParams.get('clusterName') || '';
+    const hostNameFromURL = queryParams.get('hostName') || '';
     const [clusterName, setClusterName] = useState(clusterNameFromURL);
     const [queryResults, setQueryResults] = useState<QueryResult[]>([]);
     const [queryResultsNonIdleConns, setQueryResultsNonIdleConns] = useState<QueryResult[]>([]);
@@ -725,18 +726,18 @@ const PostgrePA: React.FC = () => {
     const [pgBouncerStats, setPgBouncerStats] = useState<PgBouncerStat[]>([]);
     const [isLoadingPgBouncerStats, setIsLoadingPgBouncerStats] = useState(true);
     const [isLoadingQueryResults, setIsLoadingQueryResults] = useState(true);
-    const [isLoadingLongRunningQueryResults, setIsLoadingLongRunningQueryResults] = useState(true);
-    const [isLoadingLocsResults, setIsLoadingLocksResults] = useState(true);
+    const [isLoadingLongRunningQueryResults, setIsLoadingLongRunningQueryResults] = useState(false);
+    const [isLoadingLocksQueryResults, setIsLoadingLocksQueryResults] = useState(false);
     const [isLoadingNonIdleQueryResults, setIsLoadingNonIdleQueryResults] = useState(true);
     const [isLoadingCacheHitQueryResults, setIsLoadingCacheHitQueryResults] = useState(true);
-    const [isLoadingTopCpuQueryResults, setIsLoadingTopCpuQueryResults] = useState(true);
+    const [isLoadingTopCpuResults, setIsLoadingTopCpuResults] = useState(false);
     const [isLoadingUserAccessListResults, setIsLoadingUserAccessListResults] = useState(true);
     const [isLoadingUnusedIndexesResults, setIsLoadingUnusedIndexesResults] = useState(true);
     const [isLoadingIndexBloatResults, setIsLoadingIndexBloatResults] = useState(true);
     const [isLoadingDbStatsResults, setIsLoadingDbStatsResults] = useState(true);
     const [selectedFullPath, setSelectedFullPath] = useState<string | null>(null);
     const [currentStep, setCurrentStep] = useState(0);
-    const [activeTab, setActiveTab] = useState('1');
+    const [activeTab, setActiveTab] = useState('2'); // Set initial active tab to '2' for Queries tab
     const [selectedDatabase, setSelectedDatabase] = useState('postgres');
     const [databaseNames, setDatabaseNames] = useState<string[]>([]);
     const [pgLogFiles, setPgLogFiles] = useState<LogFile[]>([]);
@@ -753,10 +754,12 @@ const PostgrePA: React.FC = () => {
     const [minDuration, setMinDuration] = useState('');
 
     // Yeni state değişkenleri
-    const [selectedSubMenu, setSelectedSubMenu] = useState<string>('');
+    const [selectedSubMenu, setSelectedSubMenu] = useState<string>('top-cpu'); // Default to top-cpu
     const [collapsed, setCollapsed] = useState<boolean>(false);
+    const [openKeys, setOpenKeys] = useState<string[]>(['queries']); // Set 'queries' submenu open by default
     const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
     const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
+
 
     const formatLogContent = (content: string) => {
         return content.split('\n')
@@ -1399,7 +1402,7 @@ const PostgrePA: React.FC = () => {
 
     const fetchQueryLocksResults = async (nodeName: string) => {
         try {
-            setIsLoadingLocksResults(true);
+            setIsLoadingLocksQueryResults(true);
             const agentId = `agent_${nodeName}`;
 
             const query = `WITH lock_info AS (
@@ -1525,10 +1528,10 @@ const PostgrePA: React.FC = () => {
             } else {
                 console.error('Invalid response format:', data);
             }
-            setIsLoadingLocksResults(false);
+            setIsLoadingLocksQueryResults(false);
         } catch (error) {
             console.error('Error fetching data:', error);
-            setIsLoadingLocksResults(false);
+            setIsLoadingLocksQueryResults(false);
         }
     };
 
@@ -1662,7 +1665,7 @@ const PostgrePA: React.FC = () => {
     const fetchQueryTopCpuResults = useCallback(async (nodeName: string) => {
         if (!nodeName) return;
         try {
-            setIsLoadingTopCpuQueryResults(true);
+            setIsLoadingTopCpuResults(true);
             const agentId = `agent_${nodeName}`;
 
             // PostgreSQL versiyonunu kontrol et
@@ -1754,7 +1757,7 @@ const PostgrePA: React.FC = () => {
             message.error('Error fetching query results');
             setQueryResultsTopCpu([]);
         } finally {
-            setIsLoadingTopCpuQueryResults(false);
+            setIsLoadingTopCpuResults(false);
         }
     }, [nodeInfo]); // Sadece nodeInfo'yu dependency olarak ekliyoruz
 
@@ -2273,8 +2276,39 @@ const PostgrePA: React.FC = () => {
 
     const handleNodeChange = (value: string) => {
         setNodeName(value);
-        if (activeTab === '4') {
+        setCurrentStep(2);
+        
+        // Reset all query results when node changes
+        setQueryResults([]);
+        setQueryResultsNonIdleConns([]);
+        setQueryResultsCacheHitRatio([]);
+        setQueryResultsUserAccessList([]);
+        setQueryResultsLongRunning([]);
+        setQueryResultsLocks([]);
+        setPgBouncerStats([]);
+        setQueryResultsTopCpu([]);
+        
+        // Load data for the current active tab and selected submenu
+        if (activeTab === '2' && selectedSubMenu === 'top-cpu') {
+            fetchQueryTopCpuResults(value);
+        } else if (activeTab === '2' && selectedSubMenu === 'long-running') {
+            fetchQueryLongRunningResults(value);
+        } else if (activeTab === '2' && selectedSubMenu === 'blocking') {
+            fetchQueryLocksResults(value);
+        } else if (activeTab === '2' && selectedSubMenu === 'cache-hit') {
+            fetchQueryCacheHitRatioResults(value);
+        } else if (activeTab === '1' && selectedSubMenu === 'connections') {
+            fetchQueryResults(value);
+        } else if (activeTab === '1' && selectedSubMenu === 'connections-by-app') {
+            fetchQueryNonIdleConnsResults(value);
+        } else if (activeTab === '1' && selectedSubMenu === 'pgbouncer') {
+            fetchPgBouncerStats(value);
+        } else if (activeTab === '4') {
             fetchSystemMetrics(value);
+        } else if (activeTab === '5') {
+            fetchPostgresLogs(value);
+        } else if (activeTab === '7') {
+            fetchQueryUserAccessList(value);
         }
     };
 
@@ -2690,13 +2724,24 @@ const PostgrePA: React.FC = () => {
                     PGVersion: node.PGVersion
                 }));
                 setNodeInfo(nodeInfo);
+                
+                // If hostName parameter is provided in URL, select that node
+                if (hostNameFromURL && nodeInfo.some(node => node.name === hostNameFromURL)) {
+                    setNodeName(hostNameFromURL);
+                    setCurrentStep(2);
+                    
+                    // Since we're using the Top CPU tab by default, fetch its data
+                    setTimeout(() => {
+                        fetchQueryTopCpuResults(hostNameFromURL);
+                    }, 100);
+                }
             } else {
                 setNodeInfo([]);
             }
         } else {
             setNodeInfo([]);
         }
-    }, [clusterName, data]);
+    }, [clusterName, data, hostNameFromURL]);
 
     const formatMemory = (memoryInGB: number): string => {
         if (!memoryInGB || memoryInGB === 0) return '0 MB';
@@ -2943,7 +2988,7 @@ const PostgrePA: React.FC = () => {
                             <div style={{ marginTop: 10 }}>
                         <Table 
                             pagination={false} 
-                            loading={isLoadingTopCpuQueryResults} 
+                            loading={isLoadingTopCpuResults} 
                             dataSource={queryResultsTopCpu.map((result, index) => ({ ...result, key: `cpu-${index}` }))} 
                             columns={columnsTopCpu} 
                             scroll={{ x: 'max-content' }}
@@ -2968,7 +3013,7 @@ const PostgrePA: React.FC = () => {
                             <div style={{ marginTop: 10 }}>
                         <Table 
                             pagination={false} 
-                            loading={isLoadingLocsResults} 
+                            loading={isLoadingLocksQueryResults} 
                             dataSource={queryResultsLocks.map((result, index) => ({ ...result, key: `lock-${index}` }))} 
                             columns={columnsLocks} 
                             scroll={{ x: 'max-content' }}
@@ -3322,6 +3367,8 @@ const PostgrePA: React.FC = () => {
                         mode="inline"
                         selectedKeys={[selectedSubMenu || (activeTab === '7' ? 'user-access-list' : activeTab === '6' ? 'db-stats' : activeTab === '5' ? 'logs' : activeTab === '4' ? 'system' : '')]}
                         style={{ height: '100%', borderRight: 0 }}
+                        openKeys={openKeys}
+                        onOpenChange={(keys) => setOpenKeys(keys as string[])}
                     >
                         <Menu.SubMenu key="connections" icon={<TeamOutlined />} title="Connections">
                             <Menu.Item key="pgbouncer" onClick={() => handleSubMenuClick('pgbouncer')}>

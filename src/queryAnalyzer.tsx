@@ -6,7 +6,7 @@ import {
 import axios from 'axios';
 import {
     ReloadOutlined, FileSearchOutlined, BarChartOutlined,
-    AlertOutlined, ClockCircleOutlined, CopyOutlined, ArrowDownOutlined, ArrowUpOutlined
+    AlertOutlined, ClockCircleOutlined, CopyOutlined, ArrowDownOutlined, ArrowUpOutlined, CheckCircleOutlined
 } from '@ant-design/icons';
 import { Key } from 'antd/es/table/interface';
 
@@ -47,6 +47,8 @@ interface LogEntry {
     planSummary: string;
     attr: LogAttributes;
     db: string;
+    uniqueId?: number;
+    severity_level?: string;
 }
 
 interface LogTimestamp {
@@ -175,7 +177,7 @@ const EmptyLogResults = ({
     <div style={{ marginBottom: '20px', fontSize: '16px' }}>
       <FileSearchOutlined style={{ fontSize: '36px', color: '#1890ff', display: 'block', margin: '0 auto 16px' }} />
       <div style={{ fontWeight: 'bold', marginBottom: '12px', fontSize: '18px' }}>
-        {fileName ? `"${fileName.split('/').pop()}" dosyasını analiz etmeye hazır` : 'Log dosyası seçildi'}
+        {fileName ? `"${fileName.split('/').pop()}" dosyası için analiz ayarları` : 'Log dosyası seçildi'}
       </div>
       <div style={{ color: '#666', fontSize: '14px', marginBottom: 24 }}>
         Bu log dosyasını analiz etmek için aşağıdaki yavaş sorgu eşiğini ayarlayın ve "Analiz Et" butonuna tıklayın.
@@ -220,13 +222,15 @@ const EmptyLogResults = ({
         paddingLeft: '24px', 
         paddingRight: '24px',
         fontWeight: 'bold',
-        boxShadow: '0 2px 10px rgba(24, 144, 255, 0.5)'
+        boxShadow: '0 2px 10px rgba(24, 144, 255, 0.5)',
+        backgroundColor: '#1890ff',
+        borderColor: '#1890ff'
       }}
     >
-      Analiz Et ve Sonuçları Göster
+      Analiz Et
     </Button>
     <div style={{ marginTop: '12px', fontSize: '12px', color: '#888' }}>
-      Eşik değeri belirlendikten sonra analiz başlayacaktır.
+      Seçtiğiniz eşik değerine göre loglar işlenecektir
     </div>
   </div>
 );
@@ -347,6 +351,18 @@ const QueryAnalyzer: React.FC = () => {
             title: 'Component',
             dataIndex: 'c',
             key: 'component',
+            filters: [
+                { text: 'command', value: 'command' },
+                { text: 'query', value: 'query' },
+                { text: 'network', value: 'network' },
+                { text: 'index', value: 'index' },
+                { text: 'storage', value: 'storage' },
+                { text: 'replication', value: 'replication' },
+                { text: 'sharding', value: 'sharding' },
+                { text: 'conn', value: 'conn' }
+            ],
+            onFilter: (value: Key | boolean, record: LogEntry) => 
+                record.c ? record.c.toLowerCase() === String(value).toLowerCase() : false,
         },
         {
             title: 'Context',
@@ -645,7 +661,7 @@ const QueryAnalyzer: React.FC = () => {
             } finally {
             setFetchingLogFiles(false);
                 setLoading(false);
-        }
+            }
     };
 
     // Log dosyası seçildiğinde çağrılacak handler
@@ -655,11 +671,15 @@ const QueryAnalyzer: React.FC = () => {
 
         console.log(`Selected log file: ${logFile}`);
         
-        // Artık dosya seçildiğinde otomatik analiz başlatmıyoruz
+        // Dosya seçildiğinde hemen analiz başlatmıyoruz
         // Kullanıcının threshold'u ayarlayıp analiz butonuna tıklamasını bekliyoruz
         message.success('Log file selected. Set the slow query threshold and click "Analyze" to start analysis.');
         
-        // EmptyLogResults bileşeni gösterilerek kullanıcının threshold ayarlaması sağlanacak
+        // Eğer zaten loglar yüklenmişse, temizle ve EmptyLogResults bileşenini göster
+        if (logs.length > 0) {
+            setLogs([]);
+            setFilteredLogs([]);
+        }
     };
 
     // Log dosyasını analiz etmek için API çağrısı
@@ -699,31 +719,49 @@ const QueryAnalyzer: React.FC = () => {
             console.log('Analyze API response status:', response.status, response.statusText);
             console.log('Analyze API response data:', response.data);
 
-            // Dosya istatistiklerini kaydet
-            if (response.data && response.data.status === 'success') {
-                setLogFileStats({
-                    errorCount: response.data.error_count || 0,
-                    infoCount: response.data.info_count || 0,
-                    warningCount: response.data.warning_count || 0,
-                    totalCount: response.data.log_entries ? response.data.log_entries.length : 0
-                });
-            }
-
+            // API yanıtını kontrol et
             if (response.status === 200) {
-                // API yanıtını kontrol et
-                if (response.data && response.data.status === 'success' && Array.isArray(response.data.log_entries)) {
-                    // API'den gelen log kayıtlarını işle
-                    const logEntries = response.data.log_entries;
+                if (response.data && response.data.status === 'success') {
+                    let logEntries = [];
+                    
+                    // API yanıtı formatını kontrol et
+                    if (Array.isArray(response.data.log_entries)) {
+                        logEntries = response.data.log_entries;
+                    } else if (response.data.data && Array.isArray(response.data.data)) {
+                        logEntries = response.data.data;
+                    } else if (Array.isArray(response.data)) {
+                        logEntries = response.data;
+                    } else {
+                        console.warn('Unexpected log entries format:', response.data);
+                        message.warning('The log file was processed but response format is not recognized');
+                        setLoading(false);
+                        return;
+                    }
+                    
                     console.log(`Parsed ${logEntries.length} log entries`);
+                    
+                    // Log dosyasının istatistiklerini güncelle
+                    setLogFileStats({
+                        errorCount: response.data.error_count || 0,
+                        warningCount: response.data.warning_count || 0,
+                        infoCount: response.data.info_count || 0,
+                        totalCount: logEntries.length
+                    });
                     
                     if (logEntries.length > 0) {
                         // API yanıtını LogEntry formatına çevir
                         const enhancedLogs = logEntries.map((entry: any, index: number) => {
                             // Timestamp'i LogTimestamp formatına çevir
-                            const timestamp = entry.timestamp_readable || new Date(entry.timestamp * 1000).toISOString();
+                            const timestamp = entry.timestamp_readable || 
+                                             (entry.timestamp ? new Date(entry.timestamp * 1000).toISOString() : 
+                                             new Date().toISOString());
+                            
+                            // Log seviyesini belirle (severity)
+                            const severity = entry.severity || 
+                                           (entry.level ? entry.level.toUpperCase().charAt(0) : 'I');
                             
                             // Command alanı için güvenlik kontrolü yap
-                            let command = entry.command;
+                            let command = entry.command || entry.Command || {};
                             if (command === undefined || command === null) {
                                 command = {}; // Varsayılan boş obje
                             }
@@ -731,21 +769,22 @@ const QueryAnalyzer: React.FC = () => {
                             return {
                                 uniqueId: index,
                                 t: { $date: timestamp },
-                                s: entry.severity || 'I',
-                                c: entry.component || '',
-                                ctx: entry.context || '',
+                                s: severity,
+                                c: entry.component || entry.c || '',
+                                ctx: entry.context || entry.ctx || '',
                                 id: index,
-                                msg: entry.message || '',
-                                planSummary: entry.plan_summary || '',
+                                msg: entry.message || entry.msg || '',
+                                planSummary: entry.plan_summary || entry.planSummary || '',
                                 attr: {
-                                    Type: 'query',
-                                    Namespace: entry.namespace || '',
+                                    Type: entry.op_type || entry.operation_type || 'query',
+                                    Namespace: entry.namespace || entry.ns || '',
                                     Command: command,
-                                    durationMillis: entry.duration_millis || 0,
-                                    planSummary: entry.plan_summary || '',
-                                    db: entry.db_name || ''
+                                    durationMillis: entry.duration_millis || entry.durationMillis || 0,
+                                    planSummary: entry.plan_summary || entry.planSummary || '',
+                                    db: entry.db_name || entry.db || ''
                                 },
-                                db: entry.db_name || ''
+                                db: entry.db_name || entry.db || '',
+                                severity_level: entry.severity || entry.level || 'info'
                             };
                         });
                         
@@ -769,6 +808,9 @@ const QueryAnalyzer: React.FC = () => {
                         setDbFilters(filters);
                         
                         message.success(`${enhancedLogs.length} log entries loaded and analyzed`);
+                        
+                        // İstatistikleri hesapla (burası log seviyelerini ve COMMAND sayısını hesaplayacak)
+                        calculateStats();
             } else {
                         message.info('No query logs found in the selected file');
                     }
@@ -800,9 +842,13 @@ const QueryAnalyzer: React.FC = () => {
 
     // selectedNode veya selectedLogFile değiştiğinde log parsing işlemini tekrar çalıştır
     useEffect(() => {
+        // Artık dosya seçildiğinde otomatik analiz yapmıyoruz
+        // Bu useEffect'i kaldırıyoruz veya devre dışı bırakıyoruz
+        /*
         if (selectedNode && selectedLogFile) {
             fetchParsedLogs(selectedNode, selectedLogFile);
         }
+        */
     }, [selectedNode, selectedLogFile]);
 
     // Log verilerini filtreleme fonksiyonu
@@ -856,8 +902,11 @@ const QueryAnalyzer: React.FC = () => {
             return;
         }
 
-        // Toplam sorgu sayısı
-        const totalQueries = logs.length;
+        // "command" component'li sorguları sayarak toplam sorgu sayısını hesapla
+        let commandCount = 0;
+        let errorCount = 0;
+        let warningCount = 0;
+        let infoCount = 0;
 
         // Ortalama yürütme süresi
         let totalExecutionTime = 0;
@@ -868,6 +917,20 @@ const QueryAnalyzer: React.FC = () => {
         const operationTypes: Record<string, number> = {};
 
         logs.forEach(log => {
+            // Log seviyesini kontrol et
+            if (log.s === 'E') {
+                errorCount++;
+            } else if (log.s === 'W') {
+                warningCount++;
+            } else if (log.s === 'I') {
+                infoCount++;
+            }
+
+            // Component'i "command" olanları say
+            if (log.c && log.c.toLowerCase() === 'command') {
+                commandCount++;
+            }
+
             // Yürütme süresi 
             if (log.attr && log.attr.durationMillis) {
                 totalExecutionTime += log.attr.durationMillis;
@@ -877,7 +940,8 @@ const QueryAnalyzer: React.FC = () => {
                     slowestQuery = {
                         query: log.attr.query ? JSON.stringify(log.attr.query) :
                             log.attr.command ? JSON.stringify(log.attr.command) :
-                                log.msg || '',
+                                (log.attr.Command && Object.keys(log.attr.Command).length > 0) ? 
+                                JSON.stringify(log.attr.Command) : log.msg || '',
                         time: log.attr.durationMillis
                     };
                 }
@@ -886,6 +950,7 @@ const QueryAnalyzer: React.FC = () => {
             // COLLSCAN sayısını bul
             if (log.attr && (
                 (log.attr.planSummary && log.attr.planSummary.includes('COLLSCAN')) ||
+                (log.planSummary && log.planSummary.includes('COLLSCAN')) || 
                 (log.msg && log.msg.includes('COLLSCAN'))
             )) {
                 collscanOps++;
@@ -906,6 +971,54 @@ const QueryAnalyzer: React.FC = () => {
                 operationTypes[log.attr.Type] = (operationTypes[log.attr.Type] || 0) + 1;
             }
         });
+
+        // COMMAND component'li log sayısı 0 ise, alternatif hesaplama yöntemleri deneyelim
+        if (commandCount === 0) {
+            // 1. Önce Command nesnesi içerisinde MongoDB operasyonu içerenleri say
+            logs.forEach(log => {
+                if (log.attr) {
+                    if (log.attr.Command && typeof log.attr.Command === 'object') {
+                        const commandObj = log.attr.Command as any;
+                        const hasMongoOp = commandObj && (
+                            commandObj.find || commandObj.insert || commandObj.update || 
+                            commandObj.delete || commandObj.aggregate || commandObj.count ||
+                            commandObj.distinct || commandObj.findAndModify
+                        );
+                        
+                        if (hasMongoOp) {
+                            commandCount++;
+                        }
+                    } 
+                    else if (log.attr.command && typeof log.attr.command === 'object') {
+                        const commandObj = log.attr.command as any;
+                        const hasMongoOp = commandObj && (
+                            commandObj.find || commandObj.insert || commandObj.update || 
+                            commandObj.delete || commandObj.aggregate || commandObj.count ||
+                            commandObj.distinct || commandObj.findAndModify
+                        );
+                        
+                        if (hasMongoOp) {
+                            commandCount++;
+                        }
+                    }
+                }
+            });
+
+            // Hala 0 ise, durationMillis > 0 olanları say
+            if (commandCount === 0) {
+                commandCount = logs.filter(log => log.attr && log.attr.durationMillis > 0).length;
+            }
+        }
+
+        const totalQueries = commandCount > 0 ? commandCount : logs.length;
+
+        // Log seviyesi sayılarını güncelle
+        setLogFileStats(prevStats => ({
+            ...prevStats,
+            errorCount,
+            warningCount,
+            infoCount
+        }));
 
         // En sık kullanılan veritabanını bulma
         let mostFrequentDb = '';
@@ -980,10 +1093,11 @@ const QueryAnalyzer: React.FC = () => {
             </div>
 
             {currentStep === 0 && (
+                <div style={{ display: 'flex', justifyContent: 'center', width: '100%', marginTop: 20 }}>
                 <Select
-                    style={{ width: '50%', marginTop: 20 }}
+                        style={{ width: '50%' }}
                     showSearch
-                    placeholder={fetchingReplSets ? "Loading replica sets..." : "Select a replica set"}
+                        placeholder={fetchingReplSets ? "Loading replica sets..." : "Select a replica set"}
                     optionFilterProp="children"
                     onChange={handleReplSetChange}
                     filterOption={(input, option) =>
@@ -991,22 +1105,24 @@ const QueryAnalyzer: React.FC = () => {
                             ? option.children.toString().toLowerCase().includes(input.toLowerCase())
                             : false
                     }
-                    loading={fetchingReplSets}
-                    notFoundContent={fetchingReplSets ? <Spin size="small" /> : "No replica sets found"}
-                    value={selectedReplicaSet}
+                        loading={fetchingReplSets}
+                        notFoundContent={fetchingReplSets ? <Spin size="small" /> : "No replica sets found"}
+                        value={selectedReplicaSet}
                 >
                     {replSets.map(replSet => (
                         <Option key={replSet} value={replSet}>{replSet}</Option>
                     ))}
                 </Select>
+                </div>
             )}
 
             {currentStep === 1 && selectedReplicaSet && (
+                <div style={{ display: 'flex', justifyContent: 'center', width: '100%', marginTop: 20 }}>
                 <Select
                     popupMatchSelectWidth={false}
-                    style={{ width: '50%', marginTop: 20 }}
+                        style={{ width: '50%' }}
                     showSearch
-                    placeholder={fetchingNodes ? "Loading nodes..." : "Select a node"}
+                        placeholder={fetchingNodes ? "Loading nodes..." : "Select a node"}
                     onChange={handleNodeChange}
                     optionFilterProp="children"
                     filterOption={(input, option) =>
@@ -1015,40 +1131,41 @@ const QueryAnalyzer: React.FC = () => {
                             : false
                     }
                     value={selectedNode}
-                    loading={fetchingNodes}
-                    notFoundContent={fetchingNodes ? <Spin size="small" /> : "No nodes found"}
-                >
-                    {nodes.map(node => {
-                        const nodeName = node.nodename || node.Hostname || '';
-                        const nodeStatus = node.status || node.NodeStatus || '';
-                        const mongoStatus = node.MongoStatus || '';
+                        loading={fetchingNodes}
+                        notFoundContent={fetchingNodes ? <Spin size="small" /> : "No nodes found"}
+                    >
+                        {nodes.map(node => {
+                            const nodeName = node.nodename || node.Hostname || '';
+                            const nodeStatus = node.status || node.NodeStatus || '';
+                            const mongoStatus = node.MongoStatus || '';
 
-                        // Status rengini belirle
-                        const statusColor = nodeStatus === 'PRIMARY' ? '#1890ff' :
-                            nodeStatus === 'SECONDARY' ? '#52c41a' :
-                                nodeStatus === 'ARBITER' ? '#722ed1' : '#f5222d';
+                            // Status rengini belirle
+                            const statusColor = nodeStatus === 'PRIMARY' ? '#1890ff' :
+                                nodeStatus === 'SECONDARY' ? '#52c41a' :
+                                    nodeStatus === 'ARBITER' ? '#722ed1' : '#f5222d';
 
-                        // MongoDB servis durumu rengini belirle
-                        const mongoStatusColor = mongoStatus === 'RUNNING' ? '#52c41a' : '#f5222d';
+                            // MongoDB servis durumu rengini belirle
+                            const mongoStatusColor = mongoStatus === 'RUNNING' ? '#52c41a' : '#f5222d';
 
-                        return (
-                            <Option key={nodeName} value={nodeName}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <span>{nodeName}</span>
-                                    <span>
-                                        <span style={{ color: statusColor, marginRight: '8px' }}>[{nodeStatus}]</span>
-                                        <span style={{ color: mongoStatusColor }}>[{mongoStatus || 'UNKNOWN'}]</span>
-                                    </span>
-                                </div>
-                            </Option>
-                        );
-                    })}
+                            return (
+                                <Option key={nodeName} value={nodeName}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span>{nodeName}</span>
+                                        <span>
+                                            <span style={{ color: statusColor, marginRight: '8px' }}>[{nodeStatus}]</span>
+                                            <span style={{ color: mongoStatusColor }}>[{mongoStatus || 'UNKNOWN'}]</span>
+                                        </span>
+                                    </div>
+                                </Option>
+                            );
+                        })}
                 </Select>
+                </div>
             )}
 
             {currentStep === 2 && selectedNode && (
-                <div style={{ marginTop: 20 }}>
-                    <div style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', marginTop: 20 }}>
+                    <div style={{ width: '80%', marginBottom: 10 }}>
                         <strong>Available Log Files ({logFiles.length}):</strong>
                         {fetchingLogFiles && <Spin size="small" style={{ marginLeft: 10 }} />}
                         {!fetchingLogFiles && logFiles.length > 0 && !selectedLogFile && (
@@ -1061,7 +1178,7 @@ const QueryAnalyzer: React.FC = () => {
                     showSearch
                         placeholder={fetchingLogFiles ? "Loading log files..." : "Select a log file to analyze"}
                         style={{ 
-                            width: '100%', 
+                            width: '80%', 
                             ...(logFiles.length > 0 && !selectedLogFile ? { 
                                 borderColor: '#1890ff', 
                                 boxShadow: '0 0 0 2px rgba(24,144,255,0.2)' 
@@ -1110,12 +1227,12 @@ const QueryAnalyzer: React.FC = () => {
                         })}
                 </Select>
                     {!selectedLogFile && logFiles.length > 0 && (
-                        <div style={{ marginTop: 5, color: '#1890ff', fontSize: 12, textAlign: 'center' }}>
+                        <div style={{ marginTop: 5, color: '#1890ff', fontSize: 12, textAlign: 'center', width: '80%' }}>
                             <ArrowUpOutlined style={{ marginRight: 4 }} /> Click to open the dropdown and select a log file
                         </div>
                     )}
                     {logFiles.length === 0 && !fetchingLogFiles && (
-                        <div style={{ marginTop: 10, color: '#ff4d4f', textAlign: 'center', padding: '10px' }}>
+                        <div style={{ marginTop: 10, color: '#ff4d4f', textAlign: 'center', padding: '10px', width: '80%' }}>
                             <AlertOutlined style={{ marginRight: 5 }} />
                             No log files found. Please check if logs exist for this node.
                         </div>
@@ -1138,23 +1255,16 @@ const QueryAnalyzer: React.FC = () => {
                                 style={{ marginBottom: '16px' }}
                                 size="small"
                                 extra={
-                                    Array.isArray(logs) && logs.length > 0 ? (
-                                        <Tooltip title="Re-analyze log with current threshold value">
-                                            <Button 
-                                                type="primary" 
-                                                onClick={() => fetchParsedLogs(selectedNode as string, selectedLogFile)}
-                                                icon={<ReloadOutlined />}
-                                            >
-                                                Re-analyze
-                                            </Button>
-                                        </Tooltip>
-                                    ) : (
-                                        <span style={{ color: '#1890ff' }}>
-                                            <ArrowDownOutlined /> Adjust threshold below and analyze
-                                        </span>
-                                    )
+                                    <span style={{ color: logs.length > 0 ? '#52c41a' : '#1890ff' }}>
+                                        {logs.length > 0 ? (
+                                            <><CheckCircleOutlined /> Analysis completed</>
+                                        ) : (
+                                            <><ArrowDownOutlined /> Adjust threshold below and analyze</>
+                                        )}
+                                    </span>
                                 }
                             >
+                                {Array.isArray(logs) && logs.length > 0 ? (
                                 <Row gutter={16}>
                                     <Col span={6}>
                                         <Statistic 
@@ -1184,6 +1294,11 @@ const QueryAnalyzer: React.FC = () => {
                                         />
                                     </Col>
                                 </Row>
+                                ) : (
+                                    <div style={{ padding: '8px 0', color: '#888' }}>
+                                        Analiz başlatılmadı. Aşağıda eşik değerini ayarlayın ve "Analiz Et" butonuna tıklayın.
+                                    </div>
+                                )}
                                 
                                 {/* Dosya bilgileri */}
                                 <div style={{ marginTop: '16px', color: '#888', borderTop: '1px solid #f0f0f0', paddingTop: 16 }}>
@@ -1383,45 +1498,65 @@ const QueryAnalyzer: React.FC = () => {
             </div>
 
             {currentStep === 3 && (
-                <div style={{ marginTop: 5 }}>
-                    <button
+                <div style={{ 
+                    marginTop: 16, 
+                    display: 'flex', 
+                    justifyContent: 'center', 
+                    gap: 12,
+                    width: '100%'
+                }}>
+                    <Button
+                        type="default"
                         onClick={resetSteps}
                         style={{
-                            marginRight: 10,
-                            padding: '4px 15px',
-                            borderRadius: '2px',
-                            border: '1px solid #d9d9d9',
-                            background: '#fff',
-                            cursor: 'pointer'
+                            backgroundColor: '#f5f5f5',
+                            borderColor: '#d9d9d9',
+                            color: '#000',
+                            fontWeight: 500
                         }}
+                        icon={<ReloadOutlined />}
                     >
                         Start Over
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                        type="default"
                         onClick={resetLogFileStep}
                         style={{
-                            marginRight: 10,
-                            padding: '4px 15px',
-                            borderRadius: '2px',
-                            border: '1px solid #d9d9d9',
-                            background: '#fff',
-                            cursor: 'pointer'
+                            backgroundColor: '#e6f7ff',
+                            borderColor: '#91d5ff',
+                            color: '#1890ff',
+                            fontWeight: 500
                         }}
                     >
                         Select New Log File
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                        type="default"
                         onClick={resetNodeStep}
                         style={{
-                            padding: '4px 15px',
-                            borderRadius: '2px',
-                            border: '1px solid #d9d9d9',
-                            background: '#fff',
-                            cursor: 'pointer'
+                            backgroundColor: '#f6ffed',
+                            borderColor: '#b7eb8f',
+                            color: '#52c41a',
+                            fontWeight: 500
                         }}
                     >
                         Select New Node
-                    </button>
+                    </Button>
+                    {Array.isArray(logs) && logs.length > 0 && (
+                        <Button
+                            type="primary"
+                            onClick={() => fetchParsedLogs(selectedNode as string, selectedLogFile as string)}
+                            style={{
+                                backgroundColor: '#722ed1',
+                                borderColor: '#531dab',
+                                fontWeight: 500
+                            }}
+                            icon={<ReloadOutlined spin={loading} />}
+                            loading={loading}
+                        >
+                            Re-analyze
+                        </Button>
+                    )}
                 </div>
             )}
         </div>

@@ -30,6 +30,20 @@ const parseDiskSize = (diskData: string | undefined): number => {
 };
 
 export const getStatusColor = (node: NodeType): string => {
+    // For debugging
+    console.log("Evaluating status for node:", node.nodename || node.Hostname, node);
+
+    // Check if node has MongoDB or PostgreSQL service status
+    const mongoStatus = node.MongoStatus ? node.MongoStatus.toUpperCase() : "";
+    const pgStatus = node.PGServiceStatus ? node.PGServiceStatus.toUpperCase() : "";
+    
+    // If any service status exists and is not RUNNING, show as critical
+    if ((mongoStatus && mongoStatus !== "RUNNING") || 
+        (pgStatus && pgStatus !== "RUNNING")) {
+        return STATUS_COLORS.RED;
+    }
+    
+    // Check node operational status
     const isHealthyStatus =
         node.status === "PRIMARY" ||
         node.status === "MASTER" ||
@@ -39,15 +53,19 @@ export const getStatusColor = (node: NodeType): string => {
         node.NodeStatus === "MASTER" ||
         node.NodeStatus === "SECONDARY" ||
         node.NodeStatus === "SLAVE";
-
-    const freeDisk = node.freediskpercent || node.FDPercent || 100;
-    const freeDiskData = parseDiskSize(node.freediskdata || node.FreeDisk);
-
+    
+    // Check operational status
     if (!isHealthyStatus) {
+        console.log(`Node ${node.nodename || node.Hostname} has unhealthy operational status`);
         return STATUS_COLORS.RED; // Kritik Durum
     }
 
+    // Check disk space
+    const freeDisk = node.freediskpercent || node.FDPercent || 100;
+    const freeDiskData = parseDiskSize(node.freediskdata || node.FreeDisk);
+
     if (freeDisk < 25 && freeDiskData < 100) {
+        console.log(`Node ${node.nodename || node.Hostname} has low disk space: ${freeDisk}% free, ${freeDiskData}GB`);
         return STATUS_COLORS.YELLOW; // Uyarı Durumu
     }
 
@@ -66,26 +84,51 @@ const Hexagon: React.FC<HexagonProps> = ({ node, size = "small" }) => {
 
     const isCritical = statusColor === STATUS_COLORS.RED;
 
-    const tooltipContent =
-        node.dbType === "MongoDB"
-            ? `
-              <strong>MongoDB Node</strong><br/>
-              <strong>Name:</strong> ${node.nodename || "N/A"}<br/>
-              <strong>ReplSet:</strong> ${node.replsetname || "N/A"}<br/>
-              <strong>Status:</strong> ${node.status || "N/A"}<br/>
-              <strong>Location:</strong> ${node.dc || "N/A"}<br/>
-              <strong>Free Disk:</strong> ${node.freediskpercent || "N/A"}%<br/>
-              <strong>Free Disk Data:</strong> ${node.freediskdata || "N/A"}
-            `
-            : `
-              <strong>PostgreSQL Node</strong><br/>
-              <strong>Hostname:</strong> ${node.Hostname || "N/A"}<br/>
-              <strong>Cluster:</strong> ${node.ClusterName || "N/A"}<br/>
-              <strong>Status:</strong> ${node.NodeStatus || "N/A"}<br/>
-              <strong>Location:</strong> ${node.DC || "N/A"}<br/>
-              <strong>Free Disk:</strong> ${node.FDPercent || "N/A"}%<br/>
-              <strong>Free Disk Data:</strong> ${node.FreeDisk || "N/A"}
-            `;
+    // Get node display values with fallbacks
+    const nodeStatus = node.dbType === "MongoDB" 
+        ? (node.status || node.NodeStatus || "N/A")
+        : (node.NodeStatus || node.status || "N/A");
+    
+    const location = node.dbType === "MongoDB"
+        ? (node.dc || node.DC || "N/A")
+        : (node.DC || node.dc || "N/A");
+    
+    const nodeName = node.dbType === "MongoDB"
+        ? (node.nodename || node.Hostname || "N/A")
+        : (node.Hostname || node.nodename || "N/A");
+    
+    const clusterName = node.dbType === "MongoDB"
+        ? (node.replsetname || node.ClusterName || "N/A")
+        : (node.ClusterName || "N/A");
+    
+    const freeDiskPercent = node.dbType === "MongoDB"
+        ? (node.freediskpercent || node.FDPercent || "N/A")
+        : (node.FDPercent || node.freediskpercent || "N/A");
+    
+    const freeDiskData = node.dbType === "MongoDB"
+        ? (node.freediskdata || node.FreeDisk || "N/A")
+        : (node.FreeDisk || node.freediskdata || "N/A");
+
+    const mongoSpecificInfo = node.dbType === "MongoDB" && node.MongoStatus
+        ? `<strong>Service Status:</strong> ${node.MongoStatus}<br/>`
+        : '';
+    
+    const replicationInfo = node.dbType === "MongoDB" && node.ReplicationLagSec !== undefined
+        ? `<strong>Replication Lag:</strong> ${node.ReplicationLagSec} seconds<br/>`
+        : '';
+
+    const tooltipContent = `
+        <strong>${node.dbType} Node</strong><br/>
+        <strong>Name:</strong> ${nodeName}<br/>
+        <strong>${node.dbType === "MongoDB" ? "ReplSet" : "Cluster"}:</strong> ${clusterName}<br/>
+        <strong>Status:</strong> ${nodeStatus}<br/>
+        ${mongoSpecificInfo}
+        ${replicationInfo}
+        <strong>Location:</strong> ${location}<br/>
+        <strong>Free Disk:</strong> ${freeDiskPercent}%<br/>
+        <strong>Free Disk Data:</strong> ${freeDiskData}<br/>
+        <strong>IP:</strong> ${node.IP || "N/A"}
+    `;
 
 
     return (

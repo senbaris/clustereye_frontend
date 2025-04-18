@@ -201,7 +201,6 @@ const Mongo: React.FC = () => {
 				method: 'GET',
 				headers: {
 					'Content-Type': 'application/json',
-					'X-Requested-With': 'XMLHttpRequest',
 					'Accept': 'application/json',
 					...(token ? { 'Authorization': `Bearer ${token}` } : {})
 				},

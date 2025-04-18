@@ -229,26 +229,14 @@ div.panels-wrapper {
   -webkit-text-fill-color: red;
 }
 
-@keyframes blink {
-  0% {
-    background-color: initial;
-    /* Start with the initial background color */
-  }
-
-  50% {
-    background-color: red;
-    /* Blink color (e.g., yellow) */
-  }
-
-  100% {
-    background-color: initial;
-    /* Back to the initial background color */
-  }
+@keyframes blinking {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
 }
 
 .blinking-panel {
-  animation: blink 1s ease-in-out infinite;
-  /* Adjust duration and timing function as needed */
+  animation: blinking 1.5s infinite;
 }
 
 @keyframes blink2 {
@@ -713,4 +701,37 @@ html {
 .low-cache-hit-ratio {
   background-color: rgb(255, 204, 1);
   /* Ya da istediğiniz bir renk */
+}
+
+/* Critical durumunda olan hexagonlar için animasyon */
+.hexagon.blinking {
+  animation: blinking 1.5s infinite;
+}
+
+/* Critical durumunda olan kartlar için animasyon */
+.blinking-card {
+  animation: blinking 1.5s infinite;
+}
+
+/* Daha hafif yanıp sönen efekt */
+@keyframes warningPulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.85; }
+  100% { opacity: 1; }
+}
+
+/* Uyarı durumundaki kartlar için animasyon */
+.warning-card {
+  animation: warningPulse 2s infinite;
+  border-left-color: #FFC107 !important;
+}
+
+/* Cluster'lar için styling */
+.cluster-with-issues {
+  order: 0 !important; /* Sorunlu cluster'lar en üste */
+}
+
+/* NodeStatusGrid içindeki cluster container */
+div.ant-card + div.ant-card {
+  margin-top: 16px;
 }

@@ -12,6 +12,10 @@ export type NodeType = {
     freediskdata?: string; // MongoDB disk alanı
     FreeDisk?: string; // PostgreSQL disk alanı
     dbType?: "MongoDB" | "PostgreSQL"; // Hangi veri tabanı tipi
+    MongoStatus?: string; // MongoDB service status
+    PGServiceStatus?: string; // PostgreSQL service status
+    ReplicationLagSec?: number; // Replication lag in seconds
+    IP?: string; // IP address
 };
 
   
